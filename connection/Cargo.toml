@@ -1,0 +1,26 @@
+[package]
+name = "connection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["serial", "udp"]
+serial = ["dep:mio", "dep:mio-serial", "dep:cobs"]
+udp = ["dep:mio", "mio/net", "dep:network-interface"]
+
+[dependencies]
+flume.workspace = true
+deku.workspace = true
+bitvec.workspace = true
+log.workspace = true
+
+mio = { workspace = true, features = ["os-poll"], optional = true }
+
+# Serial
+cobs = { workspace = true, optional = true }
+mio-serial = { workspace = true, optional = true }
+
+# Udp
+socket2.workspace = true
+network-interface = { workspace = true, optional = true }
