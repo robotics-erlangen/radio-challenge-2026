@@ -102,6 +102,9 @@ impl PeriodicConnectionPool {
     pub fn recv(&self) -> RobotMessage {
         self.inner.recv()
     }
+    pub fn try_recv(&self) -> Result<RobotMessage, flume::TryRecvError> {
+        self.inner.try_recv()
+    }
     pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage> {
         self.inner.recv_async()
     }
@@ -111,6 +114,9 @@ impl PeriodicConnectionPool {
         self.inner.connection_stats(robot_id)
     }
 
+    pub fn has_robot(&self, robot_id: u8) -> bool {
+        self.inner.has_robot(robot_id)
+    }
     pub fn connected_robots(&self) -> Vec<u8> {
         self.inner.connected_robots()
     }
@@ -242,7 +248,9 @@ impl ConnectionPool {
     pub fn recv(&self) -> RobotMessage {
         self.out_channel.recv().unwrap()
     }
-
+    pub fn try_recv(&self) -> Result<RobotMessage, flume::TryRecvError> {
+        self.out_channel.try_recv()
+    }
     pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage> {
         self.out_channel.recv_async()
     }
@@ -255,6 +263,12 @@ impl ConnectionPool {
             .map(|(_, proto)| proto.stats())
     }
 
+    pub fn has_robot(&self, robot_id: u8) -> bool {
+        self.active_connections
+            .read()
+            .unwrap()
+            .contains_key(&robot_id)
+    }
     pub fn connected_robots(&self) -> Vec<u8> {
         self.active_connections
             .read()

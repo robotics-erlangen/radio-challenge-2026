@@ -129,7 +129,7 @@ pub struct RegularCommandData {
     pub dribbler: f32,
     /// `0`: Disable kicker
     ///
-    /// `1-255`: Enable kicker with set power. Conversion from speed/chip distance:
+    /// `1-255`: Enable kicker with set power. Conversion to speed/chip distance:
     /// ```rust,ignore
     /// static MAX_SHOT_SPEED: u32 = 10;
     /// static MAX_CHIP_DIST: u32 = 5;
@@ -139,6 +139,7 @@ pub struct RegularCommandData {
     ///     shot_power / 255 * MAX_SHOT_SPEED
     /// }
     /// ```
+    // TODO: Automatic shot power conversion
     pub shot_power: u8,
     /// `false`: Flat kick, `true`: Chip
     #[deku(bits = 1)]
@@ -216,75 +217,75 @@ pub struct TrajectoryPath {
         reader = "float_from_int(deku::reader, endian, bit_order, POS_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, POS_CODEC, self.start_pos_x)"
     )]
-    start_pos_x: f32,
+    pub start_pos_x: f32,
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, POS_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, POS_CODEC, self.start_pos_y)"
     )]
-    start_pos_y: f32,
+    pub start_pos_y: f32,
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, ANGLE_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, ANGLE_CODEC, normalize_angle(self.start_phi))"
     )]
-    start_phi: f32,
+    pub start_phi: f32,
 
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, VEL_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, VEL_CODEC, self.start_vel_x)"
     )]
-    start_vel_x: f32,
+    pub start_vel_x: f32,
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, VEL_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, VEL_CODEC, self.start_vel_y)"
     )]
-    start_vel_y: f32,
+    pub start_vel_y: f32,
 
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, ANGLE_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, ANGLE_CODEC, normalize_angle(self.end_phi))"
     )]
-    end_phi: f32,
+    pub end_phi: f32,
 
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, VEL_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, VEL_CODEC, self.end_vel_x)"
     )]
-    end_vel_x: f32,
+    pub end_vel_x: f32,
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, VEL_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, VEL_CODEC, self.end_vel_x)"
     )]
-    end_vel_y: f32,
+    pub end_vel_y: f32,
 
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, TRAJECTORY_PATH_ALPHA_CODEC)",
         writer = "float_to_int(deku::writer, endian, bit_order, TRAJECTORY_PATH_ALPHA_CODEC, normalize_angle(self.alpha))"
     )]
-    alpha: f32,
+    pub alpha: f32,
     #[deku(
         reader = "float_from_uint(deku::reader, endian, bit_order, TRAJECTORY_PATH_T_CODEC)",
         writer = "float_to_uint(deku::writer, endian, bit_order, TRAJECTORY_PATH_T_CODEC, self.t)"
     )]
-    t: f32,
+    pub t: f32,
 
     #[deku(
         reader = "float_from_uint(deku::reader, endian, bit_order, TRAJECTORY_PATH_ACC_CODEC)",
         writer = "float_to_uint(deku::writer, endian, bit_order, TRAJECTORY_PATH_ACC_CODEC, self.acceleration)"
     )]
-    acceleration: f32,
+    pub acceleration: f32,
     #[deku(
         reader = "float_from_uint(deku::reader, endian, bit_order, TRAJECTORY_PATH_VEL_CODEC)",
         writer = "float_to_uint(deku::writer, endian, bit_order, TRAJECTORY_PATH_VEL_CODEC, self.v_max)"
     )]
-    v_max: f32,
+    pub v_max: f32,
 
     #[deku(
         reader = "float_from_uint(deku::reader, endian, bit_order, TRAJECTORY_PATH_SLOW_DOWN_TIME_CODEC)",
         writer = "float_to_uint(deku::writer, endian, bit_order, TRAJECTORY_PATH_SLOW_DOWN_TIME_CODEC, self.slow_down_time)"
     )]
-    slow_down_time: f32,
+    pub slow_down_time: f32,
     #[deku(bits = 1)]
-    is_fast_endspeed: bool,
+    pub is_fast_endspeed: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
