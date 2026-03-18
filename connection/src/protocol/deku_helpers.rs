@@ -1,18 +1,72 @@
 use bitvec::field::BitField;
+use deku::error::NeedSize;
 use deku::prelude::{Reader, Writer};
-use deku::{DekuContainerWrite, DekuError, DekuWriter};
+use deku::{DekuContainerRead, DekuContainerWrite, DekuError, DekuWriter};
 
 /// Packed sizes cannot be inferred because deku calculates sizes for enums and vecs at runtime.
-/// This trait provides safe fixed-size packing methods that can make enums replicate the
-/// behavior of C unions, as long as they only appear as the last element in a struct.
-pub trait FixedSizePacking<const SIZE: usize>: DekuContainerWrite {
+/// This trait provides safe fixed-size packing functions that can make enums at the end of a struct
+/// replicate the padding behavior of C unions.
+pub trait PacketPacking<const SIZE: usize> {
     fn packed_size() -> usize {
         SIZE
     }
-    fn pack_padded(&self) -> Vec<u8> {
-        let mut bytes = self.to_bytes().unwrap();
-        bytes.resize(Self::packed_size(), 0);
+
+    fn pack_to_slice(&self, slice: &mut [u8]);
+    fn pack_to_vec(&self) -> Vec<u8> {
+        let mut bytes = vec![0u8; SIZE];
+        self.pack_to_slice(&mut bytes);
         bytes
+    }
+}
+
+impl<const N: usize> PacketPacking<N> for [u8; N] {
+    fn pack_to_slice(&self, slice: &mut [u8]) {
+        slice[..N].copy_from_slice(self);
+    }
+}
+impl<const N: usize> PacketPacking<N> for Box<[u8; N]> {
+    fn pack_to_slice(&self, slice: &mut [u8]) {
+        slice[..N].copy_from_slice(&**self);
+    }
+}
+
+pub trait PacketUnpacking<const SIZE: usize> {
+    fn packed_size() -> usize {
+        SIZE
+    }
+    fn unpack(slice: &[u8]) -> Result<Self, DekuError>
+    where
+        Self: Sized;
+}
+
+impl<const N: usize> PacketUnpacking<N> for [u8; N] {
+    fn unpack(slice: &[u8]) -> Result<Self, DekuError> {
+        if slice.len() < N {
+            return Err(DekuError::Incomplete(NeedSize::new(N * 8)));
+        }
+        let mut out = [0u8; N];
+        out.copy_from_slice(&slice[..N]);
+        Ok(out)
+    }
+}
+
+/// Marker trait providing a PacketPacking and PacketUnpacking implementations for deku structs
+pub trait DekuPackedSize<const SIZE: usize>:
+    DekuContainerWrite + for<'a> DekuContainerRead<'a>
+{
+}
+impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketPacking<SIZE> for T {
+    fn pack_to_slice(&self, slice: &mut [u8]) {
+        let written = self.to_slice(slice).unwrap();
+        #[allow(clippy::needless_range_loop)]
+        for i in written..SIZE {
+            slice[i] = 0;
+        }
+    }
+}
+impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketUnpacking<SIZE> for T {
+    fn unpack(slice: &[u8]) -> Result<Self, DekuError> {
+        Self::from_bytes((slice, 0)).map(|x| x.1)
     }
 }
 

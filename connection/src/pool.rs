@@ -1,7 +1,5 @@
-use crate::conn_core::{ConnectionCore, PacketRxResult};
 use crate::conn_stats::ConnectionStats;
-use crate::packet::RegularCommandData;
-use crate::packet::datagrams::CommandDatagram;
+use crate::protocol::{PacketRxResult, RadioProtocol};
 #[cfg(feature = "serial")]
 use crate::serial::SerialTransceiver;
 #[cfg(feature = "udp")]
@@ -11,13 +9,20 @@ use flume::{Receiver, Sender};
 use log::info;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub struct PeriodicConnectionPool {
-    inner: Arc<ConnectionPool>,
-    packets: Arc<RwLock<HashMap<u8, RegularCommandData>>>,
+pub struct PeriodicConnectionPool<
+    RC: Clone + Default + Send + Sync + 'static,
+    RR: Send + Sync + 'static,
+    DC: Send + Sync + 'static,
+    DR: Send + Sync + 'static,
+    P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
+> {
+    inner: Arc<ConnectionPool<RC, RR, DC, DR, P>>,
+    packets: Arc<RwLock<HashMap<u8, RC>>>,
     thread: Option<thread::JoinHandle<()>>,
     thread_control_channel: Sender<PeriodicConnectionPoolControlMessage>,
     send_period: Duration,
@@ -28,10 +33,17 @@ enum PeriodicConnectionPoolControlMessage {
     Stop,
 }
 
-impl PeriodicConnectionPool {
-    pub fn new(conn_pool: ConnectionPool) -> Self {
+impl<
+    RC: Clone + Default + Send + Sync + 'static,
+    RR: Send + Sync + 'static,
+    DC: Send + Sync + 'static,
+    DR: Send + Sync + 'static,
+    P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
+> PeriodicConnectionPool<RC, RR, DC, DR, P>
+{
+    pub fn new(conn_pool: ConnectionPool<RC, RR, DC, DR, P>) -> Self {
         let inner = Arc::new(conn_pool);
-        let packets = Arc::new(RwLock::new(HashMap::<u8, RegularCommandData>::new()));
+        let packets = Arc::new(RwLock::new(HashMap::<u8, RC>::new()));
         let (thread_control_sender, thread_control_receiver) = flume::bounded(100);
 
         let thread = {
@@ -49,7 +61,7 @@ impl PeriodicConnectionPool {
                             .unwrap()
                             .get(&robot_id)
                             .cloned()
-                            .unwrap_or_else(RegularCommandData::default);
+                            .unwrap_or_else(RC::default);
                         inner.send_packet(robot_id, packet.clone());
                     }
 
@@ -92,20 +104,20 @@ impl PeriodicConnectionPool {
         self.send_period
     }
 
-    pub fn set_regular_packet(&self, robot_id: u8, packet: RegularCommandData) {
+    pub fn set_regular_packet(&self, robot_id: u8, packet: RC) {
         self.packets.write().unwrap().insert(robot_id, packet);
     }
-    pub fn queue_datagram(&self, robot_id: u8, datagram: CommandDatagram) {
+    pub fn queue_datagram(&self, robot_id: u8, datagram: DC) {
         self.inner.queue_datagram(robot_id, datagram);
     }
 
-    pub fn recv(&self) -> RobotMessage {
+    pub fn recv(&self) -> RobotMessage<RR, DR> {
         self.inner.recv()
     }
-    pub fn try_recv(&self) -> Result<RobotMessage, flume::TryRecvError> {
+    pub fn try_recv(&self) -> Result<RobotMessage<RR, DR>, flume::TryRecvError> {
         self.inner.try_recv()
     }
-    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage> {
+    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage<RR, DR>> {
         self.inner.recv_async()
     }
 
@@ -125,7 +137,14 @@ impl PeriodicConnectionPool {
     }
 }
 
-impl Drop for PeriodicConnectionPool {
+impl<
+    RC: Clone + Default + Send + Sync + 'static,
+    RR: Send + Sync + 'static,
+    DC: Send + Sync + 'static,
+    DR: Send + Sync + 'static,
+    P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
+> Drop for PeriodicConnectionPool<RC, RR, DC, DR, P>
+{
     fn drop(&mut self) {
         self.thread_control_channel
             .send(PeriodicConnectionPoolControlMessage::Stop)
@@ -134,20 +153,34 @@ impl Drop for PeriodicConnectionPool {
     }
 }
 
-pub struct ConnectionPool {
+pub struct ConnectionPool<
+    RC,
+    RR: Send + 'static,
+    DC,
+    DR: Send + 'static,
+    P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
+> {
     /// Merged message stream from all connections
-    out_channel: Receiver<RobotMessage>,
+    out_channel: Receiver<RobotMessage<RR, DR>>,
     #[cfg(feature = "serial")]
     serial_transceiver: SerialTransceiver,
     #[cfg(feature = "udp")]
     udp_transceiver: UdpTransceiver,
-    active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, ConnectionCore)>>>,
+    active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>>,
     /// List of connections to duplicate robot ids. Will be promoted if the active one disconnects.
     #[allow(dead_code)]
     idle_connections: Arc<RwLock<Vec<(u8, RobotTransceiverAddress)>>>,
+    _phantom_data: PhantomData<(RC, RR, DC, DR)>,
 }
 
-impl ConnectionPool {
+impl<
+    RC,
+    RR: Send + 'static,
+    DC,
+    DR: Send + 'static,
+    P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
+> ConnectionPool<RC, RR, DC, DR, P>
+{
     pub fn start() -> Self {
         info!("Starting connection pool");
 
@@ -163,7 +196,7 @@ impl ConnectionPool {
             Arc::new(move |msg: TransceiverMessage| match msg {
                 TransceiverMessage::Connected(addr, robot_id) => {
                     if let Entry::Vacant(e) = active_connections.write().unwrap().entry(robot_id) {
-                        e.insert((addr.clone(), ConnectionCore::new()));
+                        e.insert((addr.clone(), P::default()));
                         sender
                             .send(RobotMessage::Connected(robot_id, addr))
                             .unwrap();
@@ -187,7 +220,7 @@ impl ConnectionPool {
                         // Replace with idle connection where possible
                         if let Some(idx) = idle.iter().position(|(i, _)| *i == id) {
                             let (_, new_addr) = idle.remove(idx);
-                            active.insert(id, (new_addr.clone(), ConnectionCore::new()));
+                            active.insert(id, (new_addr.clone(), P::default()));
                             sender.send(RobotMessage::Connected(id, new_addr)).unwrap();
                         }
                     }
@@ -221,11 +254,12 @@ impl ConnectionPool {
             udp_transceiver: UdpTransceiver::start(msg_handler.clone()).unwrap(),
             active_connections,
             idle_connections,
+            _phantom_data: PhantomData,
         }
     }
 
     // TODO: New send api that returns protocol references
-    pub fn send_packet(&self, robot_id: u8, packet: RegularCommandData) {
+    pub fn send_packet(&self, robot_id: u8, packet: RC) {
         if let Some((addr, proto)) = self.active_connections.write().unwrap().get_mut(&robot_id) {
             let bytes = proto.next_packet(packet);
             match addr {
@@ -239,19 +273,19 @@ impl ConnectionPool {
         }
     }
 
-    pub fn queue_datagram(&self, robot_id: u8, datagram: CommandDatagram) {
+    pub fn queue_datagram(&self, robot_id: u8, datagram: DC) {
         if let Some((_addr, proto)) = self.active_connections.write().unwrap().get_mut(&robot_id) {
             proto.queue_datagram(datagram);
         }
     }
 
-    pub fn recv(&self) -> RobotMessage {
+    pub fn recv(&self) -> RobotMessage<RR, DR> {
         self.out_channel.recv().unwrap()
     }
-    pub fn try_recv(&self) -> Result<RobotMessage, flume::TryRecvError> {
+    pub fn try_recv(&self) -> Result<RobotMessage<RR, DR>, flume::TryRecvError> {
         self.out_channel.try_recv()
     }
-    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage> {
+    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage<RR, DR>> {
         self.out_channel.recv_async()
     }
 

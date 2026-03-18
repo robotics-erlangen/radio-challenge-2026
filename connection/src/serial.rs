@@ -1,4 +1,4 @@
-use crate::packet::PACKET_SIZE;
+use crate::protocol::proto2025::packet::PACKET_SIZE;
 use crate::{DEFAULT_TIMEOUT, RobotTransceiverAddress, TransceiverMessage};
 use flume::{Receiver, Sender};
 use log::{error, trace, warn};

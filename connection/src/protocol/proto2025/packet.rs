@@ -1,16 +1,17 @@
-use datagrams::*;
+use crate::protocol::deku_helpers::*;
+use deku::ctx::Endian;
+use deku::ctx::Order;
 use deku::prelude::*;
-use deku_helpers::*;
 use std::f32::consts::PI;
-
-pub mod datagrams;
-pub(crate) mod deku_helpers;
 
 // All the ctx attributes are needed because endianness and bitsize are passed as context,
 // which any nested structs have to explicitly accept
 
-pub const PACKET_SIZE: usize = 29;
-pub const DATAGRAM_CHUNK_SIZE: usize = PACKET_SIZE - 2;
+pub const HEADER_SIZE: usize = 1;
+pub const PAYLOAD_SIZE: usize = 28;
+pub const PACKET_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
+
+pub const DATAGRAM_CHUNK_SIZE: usize = PAYLOAD_SIZE - 1;
 pub const MAX_CHUNKS_PER_DATAGRAM: usize = 20;
 
 /*
@@ -54,70 +55,56 @@ fn normalize_angle(mut angle: f32) -> f32 {
 }
 
 /*
- * ===========
- * = Packets =
- * ===========
+ * ======================
+ * = Packet Definitions =
+ * ======================
  */
 
 #[derive(Clone, Debug, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
-pub struct RadioPacket<RegularPayload, DatagramType>
-where
-    RegularPayload: DekuReader<'static, (deku::ctx::Endian, deku::ctx::Order)>
-        + DekuWriter<(deku::ctx::Endian, deku::ctx::Order)>,
-    DatagramType: DekuReader<'static, (deku::ctx::Endian, deku::ctx::Order)>
-        + DekuWriter<(deku::ctx::Endian, deku::ctx::Order)>,
-{
+pub struct PacketHeader {
     /// Overflowing packet counter to determine packet loss
     #[deku(bits = 6)]
     pub counter: u8,
-    /// The [`seqnum`](RadioPacketPayload::Datagram::seqnum) of the last received datagram packet
+    /// The [`seqnum`](DatagramPayload::seqnum) of the last received datagram packet
     #[deku(bits = 1)]
     pub acknum: u8,
-    // 1Bit tag included here
-    pub payload: RadioPacketPayload<RegularPayload, DatagramType>,
+    #[deku(bits = 1)]
+    pub datagram: bool,
 }
 
+impl DekuPackedSize<HEADER_SIZE> for PacketHeader {}
+
 #[derive(Clone, Debug, PartialEq, DekuRead, DekuWrite)]
-#[deku(
-    bits = 1,
-    id_type = "u8",
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
-)]
-pub enum RadioPacketPayload<RegularPayload, DatagramType>
-where
-    RegularPayload: DekuReader<'static, (deku::ctx::Endian, deku::ctx::Order)>
-        + DekuWriter<(deku::ctx::Endian, deku::ctx::Order)>,
-    DatagramType: DekuReader<'static, (deku::ctx::Endian, deku::ctx::Order)>
-        + DekuWriter<(deku::ctx::Endian, deku::ctx::Order)>,
+#[deku(endian = "little", bit_order = "lsb")]
+pub struct DatagramPayload<
+    TypeTag: DekuReader<'static, (Endian, Order)> + DekuWriter<(Endian, Order)>,
+> {
+    /// Alternating sequence number. Used to deduplicate packets on the receiving side (Can happen when the ack is lost)
+    #[deku(bits = 1)]
+    pub seqnum: u8,
+    pub datagram_type: TypeTag, // 7Bit tag // TODO: Enforce the 7bit datagram tag size
+    pub data: [u8; DATAGRAM_CHUNK_SIZE],
+}
+
+impl<
+    Tag: DekuReader<'static, (Endian, Order)> + DekuWriter<(Endian, Order)>, // TODO: Bound on DekuSize?
+> DekuPackedSize<PAYLOAD_SIZE> for DatagramPayload<Tag>
 {
-    #[deku(id = 0)]
-    Regular(RegularPayload),
-    #[deku(id = 1)]
-    Datagram {
-        /// Alternating sequence number. Used to deduplicate packets on the receiving side (Can happen when the ack is lost)
-        #[deku(bits = 1)]
-        seqnum: u8,
-        datagram_type: DatagramType, // 7Bit tag
-        data: [u8; DATAGRAM_CHUNK_SIZE],
-    },
 }
 
 // ======== Command (PC -> Robot) - Start ========
 
-pub type RadioCommandPacket = RadioPacket<RegularCommandData, CommandDatagramType>;
-impl FixedSizePacking<PACKET_SIZE> for RadioCommandPacket {}
-pub type RadioCommandPayload = RadioPacketPayload<RegularCommandData, CommandDatagramType>;
+impl DekuPackedSize<PAYLOAD_SIZE> for RegularCommandPayload {}
 
 #[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
 #[deku(
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
+    endian = "little",
+    bit_order = "lsb",
+    ctx = "endian: Endian, bit_order: Order", // The ctx should be generated automatically, but it isn't accessible in the reader/writer without this manual definition
+    ctx_default = "Endian::Little, Order::Lsb0"
 )]
-pub struct RegularCommandData {
+pub struct RegularCommandPayload {
     /// Radio system processing delay
     pub time_offset: i8,
 
@@ -192,7 +179,7 @@ pub struct RegularCommandData {
     id_type = "u8",
     endian = "endian",
     bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
+    ctx = "endian: Endian, bit_order: Order"
 )]
 pub enum Trajectory {
     #[default]
@@ -210,7 +197,7 @@ pub enum Trajectory {
 #[deku(
     endian = "endian",
     bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
+    ctx = "endian: Endian, bit_order: Order"
 )]
 pub struct TrajectoryPath {
     #[deku(
@@ -253,7 +240,7 @@ pub struct TrajectoryPath {
     pub end_vel_x: f32,
     #[deku(
         reader = "float_from_int(deku::reader, endian, bit_order, VEL_CODEC)",
-        writer = "float_to_int(deku::writer, endian, bit_order, VEL_CODEC, self.end_vel_x)"
+        writer = "float_to_int(deku::writer, endian, bit_order, VEL_CODEC, self.end_vel_y)"
     )]
     pub end_vel_y: f32,
 
@@ -292,7 +279,7 @@ pub struct TrajectoryPath {
 #[deku(
     endian = "endian",
     bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
+    ctx = "endian: Endian, bit_order: Order"
 )]
 pub struct Spline {
     #[deku(
@@ -363,79 +350,16 @@ pub struct Spline {
 
 // ======== Response (Robot -> PC) - Start ========
 
-pub type RadioResponsePacket = RadioPacket<RegularResponseData, ResponseDatagramType>;
-impl FixedSizePacking<PACKET_SIZE> for RadioResponsePacket {}
-pub type RadioResponsePayload = RadioPacketPayload<RegularResponseData, ResponseDatagramType>;
+impl DekuPackedSize<PAYLOAD_SIZE> for RegularResponsePayload {}
 
 #[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
 #[deku(
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
+    endian = "little",
+    bit_order = "lsb",
+    ctx = "endian: Endian, bit_order: Order",
+    ctx_default = "Endian::Little, Order::Lsb0"
 )]
-pub struct MotorStatus {
-    #[deku(bits = 1)]
-    pub error: bool,
-    #[deku(bits = 1)]
-    pub overheated: bool,
-    #[deku(bits = 1)]
-    pub encoder_error: bool,
-    #[deku(bits = 5)]
-    pub unused: u8,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
-#[deku(
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
-)]
-pub struct KickerStatus {
-    #[deku(bits = 1)]
-    pub error: bool,
-    #[deku(bits = 1)]
-    pub break_beam_error: bool,
-    #[deku(bits = 6)]
-    pub unused: u8,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
-#[deku(
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
-)]
-pub struct IMUStatus {
-    #[deku(bits = 1)]
-    pub error: bool,
-    #[deku(bits = 7)]
-    pub unused: u8,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
-#[deku(
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
-)]
-pub struct SdStatus {
-    #[deku(bits = 1)]
-    pub error: bool,
-    #[deku(bits = 1)]
-    pub mounted: bool,
-    #[deku(bits = 1)]
-    pub full: bool,
-    #[deku(bits = 5)]
-    pub unused: u8,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
-#[deku(
-    endian = "endian",
-    bit_order = "bit_order",
-    ctx = "endian: deku::ctx::Endian, bit_order: deku::ctx::Order"
-)]
-pub struct RegularResponseData {
+pub struct RegularResponsePayload {
     #[deku(
         reader = "float_from_uint(deku::reader, endian, bit_order, BATTERY_CODEC)",
         writer = "float_to_uint(deku::writer, endian, bit_order, BATTERY_CODEC, self.battery)"
@@ -520,6 +444,68 @@ pub struct RegularResponseData {
     pub ball_detected: bool,
 
     pub unused: u16,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[deku(
+    endian = "endian",
+    bit_order = "bit_order",
+    ctx = "endian: Endian, bit_order: Order"
+)]
+pub struct MotorStatus {
+    #[deku(bits = 1)]
+    pub error: bool,
+    #[deku(bits = 1)]
+    pub overheated: bool,
+    #[deku(bits = 1)]
+    pub encoder_error: bool,
+    #[deku(bits = 5)]
+    pub unused: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[deku(
+    endian = "endian",
+    bit_order = "bit_order",
+    ctx = "endian: Endian, bit_order: Order"
+)]
+pub struct KickerStatus {
+    #[deku(bits = 1)]
+    pub error: bool,
+    #[deku(bits = 1)]
+    pub break_beam_error: bool,
+    #[deku(bits = 6)]
+    pub unused: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[deku(
+    endian = "endian",
+    bit_order = "bit_order",
+    ctx = "endian: Endian, bit_order: Order"
+)]
+pub struct IMUStatus {
+    #[deku(bits = 1)]
+    pub error: bool,
+    #[deku(bits = 7)]
+    pub unused: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[deku(
+    endian = "endian",
+    bit_order = "bit_order",
+    ctx = "endian: Endian, bit_order: Order"
+)]
+pub struct SdStatus {
+    #[deku(bits = 1)]
+    pub error: bool,
+    #[deku(bits = 1)]
+    pub mounted: bool,
+    #[deku(bits = 1)]
+    pub full: bool,
+    #[deku(bits = 5)]
+    pub unused: u8,
 }
 
 // ======== Response (Robot -> PC) - End ========

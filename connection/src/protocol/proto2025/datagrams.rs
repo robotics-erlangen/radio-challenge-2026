@@ -1,4 +1,4 @@
-use crate::packet::deku_helpers::FixedSizePacking;
+use crate::protocol::deku_helpers::{DekuPackedSize, PacketPacking};
 use deku::{DekuContainerRead, DekuError, DekuRead, DekuWrite};
 
 // ======== Data ========
@@ -8,7 +8,7 @@ use deku::{DekuContainerRead, DekuError, DekuRead, DekuWrite};
 pub struct EchoDatagram {
     pub data: [u8; 100],
 }
-impl FixedSizePacking<100> for EchoDatagram {}
+impl DekuPackedSize<100> for EchoDatagram {}
 
 #[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
@@ -21,7 +21,7 @@ pub struct BoardIdsResponseDatagram {
     pub motor_bl: [u32; 3],
     pub motor_br: [u32; 3],
 }
-impl FixedSizePacking<84> for BoardIdsResponseDatagram {}
+impl DekuPackedSize<84> for BoardIdsResponseDatagram {}
 
 #[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
@@ -33,7 +33,7 @@ pub struct WriteKickCalibrationCommandDatagram {
     pub linear: [f32; 3],
     pub chip: [f32; 3],
 }
-impl FixedSizePacking<55> for WriteKickCalibrationCommandDatagram {}
+impl DekuPackedSize<55> for WriteKickCalibrationCommandDatagram {}
 
 // ======== Structure - Command ========
 
@@ -85,14 +85,14 @@ pub enum CommandDatagram {
 impl From<CommandDatagram> for (CommandDatagramType, Vec<u8>) {
     fn from(d: CommandDatagram) -> Self {
         match d {
-            CommandDatagram::Echo(d) => (CommandDatagramType::Echo, d.pack_padded()),
+            CommandDatagram::Echo(d) => (CommandDatagramType::Echo, d.pack_to_vec()),
             CommandDatagram::ReadRobotId => (CommandDatagramType::ReadRobotId, vec![]),
             CommandDatagram::ReadBoardIds => (CommandDatagramType::ReadBoardIds, vec![]),
             CommandDatagram::ToggleKickCalibration(d) => {
                 (CommandDatagramType::ToggleKickCalibration, vec![d as u8])
             }
             CommandDatagram::WriteKickCalibration(d) => {
-                (CommandDatagramType::WriteKickCalibration, d.pack_padded())
+                (CommandDatagramType::WriteKickCalibration, d.pack_to_vec())
             }
         }
     }

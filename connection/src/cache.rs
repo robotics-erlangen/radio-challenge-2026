@@ -1,21 +1,20 @@
-use crate::packet::RegularResponseData;
 use crate::{RobotMessage, RobotTransceiverAddress};
 use std::collections::HashMap;
 
 /// Cache that can keep track of the transient data that is sent with ConnectionPool messages, like received responses and the connection type
 #[derive(Clone, Debug, Default)]
-pub struct ConnectionStateCache {
-    connected_robots: HashMap<u8, RobotConnState>,
+pub struct ConnectionStateCache<RR> {
+    connected_robots: HashMap<u8, RobotConnState<RR>>,
 }
 
 #[derive(Clone, Debug)]
-struct RobotConnState {
+struct RobotConnState<RR> {
     transceiver_address: RobotTransceiverAddress,
-    latest_response: Option<RegularResponseData>,
+    latest_response: Option<RR>,
 }
 
-impl ConnectionStateCache {
-    pub fn update(&mut self, msg: RobotMessage) {
+impl<RR> ConnectionStateCache<RR> {
+    pub fn update<DR>(&mut self, msg: RobotMessage<RR, DR>) {
         match msg {
             RobotMessage::Connected(robot_id, addr) => {
                 self.connected_robots.insert(
@@ -48,7 +47,7 @@ impl ConnectionStateCache {
             .map(|state| &state.transceiver_address)
     }
 
-    pub fn latest_response(&self, robot_id: u8) -> Option<&RegularResponseData> {
+    pub fn latest_response(&self, robot_id: u8) -> Option<&RR> {
         self.connected_robots
             .get(&robot_id)
             .and_then(|state| state.latest_response.as_ref())

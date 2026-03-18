@@ -1,5 +1,3 @@
-use crate::packet::datagrams::ResponseDatagram;
-use crate::packet::{PACKET_SIZE, RegularResponseData};
 #[cfg(feature = "serial")]
 use mio_serial::SerialPortInfo;
 use std::fmt::{Display, Formatter};
@@ -7,11 +5,12 @@ use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use protocol::proto2025::packet::PACKET_SIZE;
+
 pub mod cache;
-pub(crate) mod conn_core;
-pub(crate) mod conn_stats;
-pub mod packet;
+pub mod conn_stats;
 pub mod pool;
+pub mod protocol;
 #[cfg(feature = "serial")]
 pub mod serial;
 #[cfg(feature = "udp")]
@@ -21,11 +20,11 @@ const DEFAULT_SEND_PERIOD: Duration = Duration::from_millis(10);
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Debug)]
-pub enum RobotMessage {
+pub enum RobotMessage<RR, DR> {
     Connected(u8, RobotTransceiverAddress),
     Disconnected(u8),
-    PacketReceived(u8, RegularResponseData),
-    DatagramReceived(u8, ResponseDatagram),
+    PacketReceived(u8, RR),
+    DatagramReceived(u8, DR),
 }
 
 #[derive(Clone, Debug)]
