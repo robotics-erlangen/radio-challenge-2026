@@ -91,7 +91,7 @@ impl UdpTransceiver {
         let mut discovery_sockets = bind_from_range(DISCOVERY_BIND_RANGE).unwrap();
         let mut data_sockets = bind_from_range(DATA_BIND_RANGE).unwrap();
 
-        // Set up mio polling. Has to be done before outside the mio thread because the waker has to be registered at creation.
+        // Set up mio polling. Has to be done outside the mio thread because the waker has to be registered at creation.
         let poll = mio::Poll::new()?;
         let waker = mio::Waker::new(poll.registry(), WAKER_TOKEN)?;
 
@@ -235,10 +235,10 @@ fn udp_mio_thread(
             continue;
         }
 
-        // TODO: More granular locking (dashmap?)
         for event in events.iter() {
             match event.token() {
                 WAKER_TOKEN => {
+                    // Process any incoming control messages
                     while let Ok(msg) = control_channel.try_recv() {
                         match msg {
                             UdpControlMessage::Write(addr, bytes) => {

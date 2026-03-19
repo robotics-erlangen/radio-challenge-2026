@@ -1,7 +1,7 @@
 use crate::protocol::deku_helpers::{DekuPackedSize, PacketPacking};
 use deku::{DekuContainerRead, DekuError, DekuRead, DekuWrite};
 
-// ======== Data ========
+// ======== Data structs ========
 
 #[derive(Clone, Debug, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
@@ -35,7 +35,7 @@ pub struct WriteKickCalibrationCommandDatagram {
 }
 impl DekuPackedSize<55> for WriteKickCalibrationCommandDatagram {}
 
-// ======== Structure - Command ========
+// ======== Command helpers ========
 
 #[derive(Clone, Copy, Debug, PartialEq, DekuRead, DekuWrite)]
 #[deku(
@@ -98,7 +98,7 @@ impl From<CommandDatagram> for (CommandDatagramType, Vec<u8>) {
     }
 }
 
-// ======== Structure - Response ========
+// ======== Response helpers ========
 
 #[derive(Clone, Copy, Debug, PartialEq, DekuRead, DekuWrite)]
 #[deku(

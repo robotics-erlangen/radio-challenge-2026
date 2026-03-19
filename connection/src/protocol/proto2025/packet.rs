@@ -4,8 +4,7 @@ use deku::ctx::Order;
 use deku::prelude::*;
 use std::f32::consts::PI;
 
-// All the ctx attributes are needed because endianness and bitsize are passed as context,
-// which any nested structs have to explicitly accept
+// deku_derive is very complicated, read https://docs.rs/deku/latest/deku/attributes to understand what is going on here.
 
 pub const HEADER_SIZE: usize = 1;
 pub const PAYLOAD_SIZE: usize = 28;

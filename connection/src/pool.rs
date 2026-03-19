@@ -166,10 +166,10 @@ pub struct ConnectionPool<
     serial_transceiver: SerialTransceiver,
     #[cfg(feature = "udp")]
     udp_transceiver: UdpTransceiver,
-    active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>>,
-    /// List of connections to duplicate robot ids. Will be promoted if the active one disconnects.
+    active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>>, // TODO: More granular locking (dashmap?)
+    /// List of connections to duplicate robot ids. Will be promoted if the active one disconnects. Unused outside of the msg_handler.
     #[allow(dead_code)]
-    idle_connections: Arc<RwLock<Vec<(u8, RobotTransceiverAddress)>>>,
+    idle_connections: Arc<RwLock<Vec<(u8, RobotTransceiverAddress)>>>, // TODO: Reject duplicate connections at the transceiver layer
     _phantom_data: PhantomData<(RC, RR, DC, DR)>,
 }
 
@@ -258,7 +258,6 @@ impl<
         }
     }
 
-    // TODO: New send api that returns protocol references
     pub fn send_packet(&self, robot_id: u8, packet: RC) {
         if let Some((addr, proto)) = self.active_connections.write().unwrap().get_mut(&robot_id) {
             let bytes = proto.next_packet(packet);

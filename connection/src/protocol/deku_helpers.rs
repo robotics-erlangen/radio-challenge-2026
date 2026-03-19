@@ -3,8 +3,8 @@ use deku::error::NeedSize;
 use deku::prelude::{Reader, Writer};
 use deku::{DekuContainerRead, DekuContainerWrite, DekuError, DekuWriter};
 
-/// Packed sizes cannot be inferred because deku calculates sizes for enums and vecs at runtime.
-/// This trait provides safe fixed-size packing functions that can make enums at the end of a struct
+/// Deku tightly packs enums, but the packets are fixed-size, regardless of which C-union is used.
+/// This trait provides fixed-size packing functions that can make enums at the end of a struct
 /// replicate the padding behavior of C unions.
 pub trait PacketPacking<const SIZE: usize> {
     fn packed_size() -> usize {
@@ -30,6 +30,7 @@ impl<const N: usize> PacketPacking<N> for Box<[u8; N]> {
     }
 }
 
+/// Reverse of [PacketPacking]
 pub trait PacketUnpacking<const SIZE: usize> {
     fn packed_size() -> usize {
         SIZE
