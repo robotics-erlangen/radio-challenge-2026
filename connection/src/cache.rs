@@ -28,7 +28,7 @@ impl<RR> ConnectionStateCache<RR> {
             RobotMessage::Disconnected(robot_id, ..) => {
                 self.connected_robots.remove(&robot_id);
             }
-            RobotMessage::PacketReceived(robot_id, packet) => {
+            RobotMessage::PacketReceived(robot_id, packet, _) => {
                 if let Some(conn_state) = self.connected_robots.get_mut(&robot_id) {
                     conn_state.latest_response = Some(packet);
                 }

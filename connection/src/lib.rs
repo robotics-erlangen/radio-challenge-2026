@@ -3,7 +3,7 @@ use mio_serial::SerialPortInfo;
 use std::fmt::{Display, Formatter};
 #[cfg(feature = "udp")]
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protocol::proto2025::packet::PACKET_SIZE;
 
@@ -23,15 +23,15 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_millis(1000);
 pub enum RobotMessage<RR, DR> {
     Connected(u8, RobotTransceiverAddress),
     Disconnected(u8),
-    PacketReceived(u8, RR),
-    DatagramReceived(u8, DR),
+    PacketReceived(u8, RR, Instant),
+    DatagramReceived(u8, DR, Instant),
 }
 
 #[derive(Clone, Debug)]
 pub enum TransceiverMessage {
     Connected(RobotTransceiverAddress, u8),
     Disconnected(RobotTransceiverAddress),
-    PacketReceived(RobotTransceiverAddress, [u8; PACKET_SIZE]),
+    PacketReceived(RobotTransceiverAddress, [u8; PACKET_SIZE], Instant),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -225,7 +225,7 @@ impl<
                         }
                     }
                 }
-                TransceiverMessage::PacketReceived(addr, bytes) => {
+                TransceiverMessage::PacketReceived(addr, bytes, received_on) => {
                     if let Some((&robot_id, (_, proto))) = active_connections
                         .write()
                         .unwrap()
@@ -234,10 +234,10 @@ impl<
                     {
                         match proto.packet_received(&bytes) {
                             PacketRxResult::Regular(packet) => sender
-                                .send(RobotMessage::PacketReceived(robot_id, packet))
+                                .send(RobotMessage::PacketReceived(robot_id, packet, received_on))
                                 .unwrap(),
                             PacketRxResult::Datagram(dgram) => sender
-                                .send(RobotMessage::DatagramReceived(robot_id, dgram))
+                                .send(RobotMessage::DatagramReceived(robot_id, dgram, received_on))
                                 .unwrap(),
                             PacketRxResult::IncompleteDatagram => {}
                         }

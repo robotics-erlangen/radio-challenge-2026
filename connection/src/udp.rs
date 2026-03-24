@@ -399,6 +399,7 @@ fn receive_data_packets(
                 msg_callback(TransceiverMessage::PacketReceived(
                     RobotTransceiverAddress::Udp(src_addr),
                     rx_buf,
+                    Instant::now(),
                 ));
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => return,

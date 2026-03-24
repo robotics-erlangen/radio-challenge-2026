@@ -421,6 +421,7 @@ fn receive_serial_packets(
                 msg_callback(TransceiverMessage::PacketReceived(
                     RobotTransceiverAddress::Serial(state.port_info.clone()),
                     (&decoded[0..PACKET_SIZE]).try_into().unwrap(),
+                    Instant::now(),
                 ))
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => return,
