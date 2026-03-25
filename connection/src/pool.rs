@@ -4,13 +4,15 @@ use crate::protocol::{PacketRxResult, RadioProtocol};
 use crate::serial::SerialTransceiver;
 #[cfg(feature = "udp")]
 use crate::udp::UdpTransceiver;
-use crate::{DEFAULT_SEND_PERIOD, RobotMessage, RobotTransceiverAddress, TransceiverMessage};
+use crate::{
+    DEFAULT_SEND_PERIOD, RobotIdFilter, RobotMessage, RobotTransceiverAddress, TransceiverMessage,
+};
 use flume::{Receiver, Sender};
 use log::info;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::marker::PhantomData;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -160,17 +162,44 @@ pub struct ConnectionPool<
     DR: Send + 'static,
     P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
 > {
+    inner: Arc<ConnectionPoolInner<P>>,
     /// Merged message stream from all connections
     out_channel: Receiver<RobotMessage<RR, DR>>,
-    #[cfg(feature = "serial")]
-    serial_transceiver: SerialTransceiver,
-    #[cfg(feature = "udp")]
-    udp_transceiver: UdpTransceiver,
-    active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>>, // TODO: More granular locking (dashmap?)
-    /// List of connections to duplicate robot ids. Will be promoted if the active one disconnects. Unused outside of the msg_handler.
-    #[allow(dead_code)]
-    idle_connections: Arc<RwLock<Vec<(u8, RobotTransceiverAddress)>>>, // TODO: Reject duplicate connections at the transceiver layer
     _phantom_data: PhantomData<(RC, RR, DC, DR)>,
+}
+
+struct ConnectionPoolInner<P> {
+    #[cfg(feature = "serial")]
+    serial_transceiver: OnceLock<SerialTransceiver>,
+    #[cfg(feature = "udp")]
+    udp_transceiver: OnceLock<UdpTransceiver>,
+    active_connections: RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>, // TODO: More granular locking (dashmap?)
+}
+
+impl<P> ConnectionPoolInner<P> {
+    fn update_transceiver_blacklists(&self) {
+        let filter = RobotIdFilter {
+            whitelist: None,
+            blacklist: Some(
+                self.active_connections
+                    .read()
+                    .unwrap()
+                    .keys()
+                    .copied()
+                    .collect(),
+            ),
+        };
+        #[cfg(feature = "serial")]
+        self.serial_transceiver
+            .get()
+            .unwrap()
+            .set_id_filter(filter.clone());
+        #[cfg(feature = "udp")]
+        self.udp_transceiver
+            .get()
+            .unwrap()
+            .set_id_filter(filter.clone());
+    }
 }
 
 impl<
@@ -185,48 +214,48 @@ impl<
         info!("Starting connection pool");
 
         let (sender, receiver) = flume::bounded(100);
-        let active_connections = Arc::new(RwLock::new(HashMap::new()));
-        let idle_connections = Arc::new(RwLock::new(Vec::new()));
+        let pool_inner = Arc::new(ConnectionPoolInner {
+            #[cfg(feature = "serial")]
+            serial_transceiver: OnceLock::new(),
+            #[cfg(feature = "udp")]
+            udp_transceiver: OnceLock::new(),
+            active_connections: RwLock::new(HashMap::new()),
+        });
 
         let msg_handler = {
+            let pool = pool_inner.clone();
             let sender = sender.clone();
-            let active_connections = active_connections.clone();
-            let idle_connections = idle_connections.clone();
 
             Arc::new(move |msg: TransceiverMessage| match msg {
                 TransceiverMessage::Connected(addr, robot_id) => {
-                    if let Entry::Vacant(e) = active_connections.write().unwrap().entry(robot_id) {
+                    // Register the new connection
+                    if let Entry::Vacant(e) =
+                        pool.active_connections.write().unwrap().entry(robot_id)
+                    {
                         e.insert((addr.clone(), P::default()));
                         sender
                             .send(RobotMessage::Connected(robot_id, addr))
                             .unwrap();
-                    } else {
-                        idle_connections.write().unwrap().push((robot_id, addr));
                     }
+                    pool.update_transceiver_blacklists();
                 }
                 TransceiverMessage::Disconnected(addr) => {
-                    let mut active = active_connections.write().unwrap();
-                    let mut idle = idle_connections.write().unwrap();
-
-                    idle.retain(|(_, a)| *a != addr);
-
                     // There should only ever be one active connection per address, but that isn't actually enforced elsewhere
-                    let removed_active = active
+                    let removed_active = pool
+                        .active_connections
+                        .write()
+                        .unwrap()
                         .extract_if(|_, (a, _)| *a == addr)
                         .map(|(id, _)| id)
                         .collect::<Vec<_>>();
                     for id in removed_active {
                         sender.send(RobotMessage::Disconnected(id)).unwrap();
-                        // Replace with idle connection where possible
-                        if let Some(idx) = idle.iter().position(|(i, _)| *i == id) {
-                            let (_, new_addr) = idle.remove(idx);
-                            active.insert(id, (new_addr.clone(), P::default()));
-                            sender.send(RobotMessage::Connected(id, new_addr)).unwrap();
-                        }
                     }
+                    pool.update_transceiver_blacklists();
                 }
                 TransceiverMessage::PacketReceived(addr, bytes, received_on) => {
-                    if let Some((&robot_id, (_, proto))) = active_connections
+                    if let Some((&robot_id, (_, proto))) = pool
+                        .active_connections
                         .write()
                         .unwrap()
                         .iter_mut()
@@ -246,34 +275,43 @@ impl<
             })
         };
 
+        _ = pool_inner
+            .serial_transceiver
+            .set(SerialTransceiver::start(msg_handler.clone()).unwrap());
+        _ = pool_inner
+            .udp_transceiver
+            .set(UdpTransceiver::start(msg_handler.clone()).unwrap());
+
         ConnectionPool {
+            inner: pool_inner,
             out_channel: receiver,
-            #[cfg(feature = "serial")]
-            serial_transceiver: SerialTransceiver::start(msg_handler.clone()).unwrap(),
-            #[cfg(feature = "udp")]
-            udp_transceiver: UdpTransceiver::start(msg_handler.clone()).unwrap(),
-            active_connections,
-            idle_connections,
             _phantom_data: PhantomData,
         }
     }
 
     pub fn send_packet(&self, robot_id: u8, packet: RC) {
-        if let Some((addr, proto)) = self.active_connections.write().unwrap().get_mut(&robot_id) {
+        let mut conns = self.inner.active_connections.write().unwrap();
+        if let Some((addr, proto)) = conns.get_mut(&robot_id) {
             let bytes = proto.next_packet(packet);
             match addr {
                 #[cfg(feature = "serial")]
                 RobotTransceiverAddress::Serial(port_info) => self
+                    .inner
                     .serial_transceiver
+                    .get()
+                    .unwrap()
                     .send(port_info.port_name.clone(), &bytes),
                 #[cfg(feature = "udp")]
-                RobotTransceiverAddress::Udp(addr) => self.udp_transceiver.send(*addr, bytes),
+                RobotTransceiverAddress::Udp(addr) => {
+                    self.inner.udp_transceiver.get().unwrap().send(*addr, bytes)
+                }
             }
         }
     }
 
     pub fn queue_datagram(&self, robot_id: u8, datagram: DC) {
-        if let Some((_addr, proto)) = self.active_connections.write().unwrap().get_mut(&robot_id) {
+        let mut conns = self.inner.active_connections.write().unwrap();
+        if let Some((_addr, proto)) = conns.get_mut(&robot_id) {
             proto.queue_datagram(datagram);
         }
     }
@@ -289,32 +327,20 @@ impl<
     }
 
     pub fn connection_stats(&self, robot_id: u8) -> Option<ConnectionStats> {
-        self.active_connections
-            .read()
-            .unwrap()
-            .get(&robot_id)
-            .map(|(_, proto)| proto.stats())
+        let conns = self.inner.active_connections.read().unwrap();
+        conns.get(&robot_id).map(|(_, proto)| proto.stats())
     }
 
     pub fn has_robot(&self, robot_id: u8) -> bool {
-        self.active_connections
-            .read()
-            .unwrap()
-            .contains_key(&robot_id)
+        let conns = self.inner.active_connections.read().unwrap();
+        conns.contains_key(&robot_id)
     }
     pub fn connected_robots(&self) -> Vec<u8> {
-        self.active_connections
-            .read()
-            .unwrap()
-            .keys()
-            .copied()
-            .collect()
+        let conns = self.inner.active_connections.read().unwrap();
+        conns.keys().copied().collect()
     }
     pub fn transceiver_addr(&self, robot_id: u8) -> Option<RobotTransceiverAddress> {
-        self.active_connections
-            .read()
-            .unwrap()
-            .get(&robot_id)
-            .map(|(addr, _proto)| addr.clone())
+        let conns = self.inner.active_connections.read().unwrap();
+        conns.get(&robot_id).map(|(addr, _proto)| addr.clone())
     }
 }

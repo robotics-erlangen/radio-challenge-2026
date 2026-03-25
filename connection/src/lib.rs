@@ -66,3 +66,16 @@ impl From<SocketAddr> for RobotTransceiverAddress {
         Self::Udp(value)
     }
 }
+
+#[derive(Clone, Default)]
+pub struct RobotIdFilter {
+    whitelist: Option<Vec<u8>>,
+    blacklist: Option<Vec<u8>>,
+}
+
+impl RobotIdFilter {
+    pub fn apply(&self, id: u8) -> bool {
+        self.whitelist.as_ref().is_none_or(|w| w.contains(&id))
+            && self.blacklist.as_ref().is_none_or(|b| !b.contains(&id))
+    }
+}

@@ -1,5 +1,5 @@
 use crate::protocol::proto2025::packet::PACKET_SIZE;
-use crate::{DEFAULT_TIMEOUT, RobotTransceiverAddress, TransceiverMessage};
+use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
 use flume::{Receiver, Sender};
 use log::{error, trace, warn};
 use mio::Interest;
@@ -136,6 +136,13 @@ impl UdpTransceiver {
         })
     }
 
+    pub fn set_id_filter(&self, filter: RobotIdFilter) {
+        self.thread_control_channel
+            .send(UdpControlMessage::SetIdFilter(filter))
+            .unwrap();
+        self.thread_control_waker.wake().unwrap();
+    }
+
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
         self.thread_control_channel
@@ -176,6 +183,7 @@ impl Drop for UdpTransceiver {
 
 enum UdpControlMessage {
     Write(SocketAddr, Vec<u8>),
+    SetIdFilter(RobotIdFilter),
     SetTimeout(Duration),
     Stop,
 }
@@ -188,6 +196,7 @@ fn udp_mio_thread(
     msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
     control_channel: Receiver<UdpControlMessage>,
 ) {
+    let mut configured_id_filter = RobotIdFilter::default();
     let mut configured_timeout = DEFAULT_TIMEOUT;
 
     let mut events = mio::Events::with_capacity(64);
@@ -259,6 +268,9 @@ fn udp_mio_thread(
                                     trace!("Sent udp data packet to {addr}");
                                 }
                             }
+                            UdpControlMessage::SetIdFilter(val) => {
+                                configured_id_filter = val;
+                            }
                             UdpControlMessage::SetTimeout(val) => {
                                 configured_timeout = val;
                             }
@@ -269,12 +281,14 @@ fn udp_mio_thread(
                 DISCOVERY_V4_TOKEN => receive_discovery_packets(
                     &discovery_socket_v4,
                     &mut connection_timeouts.write().unwrap(),
+                    &configured_id_filter,
                     configured_timeout,
                     msg_callback.clone(),
                 ),
                 DISCOVERY_V6_TOKEN => receive_discovery_packets(
                     &discovery_socket_v6,
                     &mut connection_timeouts.write().unwrap(),
+                    &configured_id_filter,
                     configured_timeout,
                     msg_callback.clone(),
                 ),
@@ -343,6 +357,7 @@ fn send_beacon_packets(socket_v4: &UdpSocket, socket_v6: &UdpSocket) {
 fn receive_discovery_packets(
     socket: &UdpSocket,
     connection_timeouts: &mut HashMap<SocketAddr, Instant>,
+    configured_id_filter: &RobotIdFilter,
     configured_timeout: Duration,
     msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
 ) {
@@ -351,6 +366,10 @@ fn receive_discovery_packets(
         match socket.recv_from(&mut rx_buf) {
             Ok((_, src_addr)) => {
                 let robot_id = rx_buf[0];
+                if !configured_id_filter.apply(robot_id) {
+                    continue;
+                }
+
                 // Construct the data address by replacing the port of the source address
                 let data_addr = match src_addr {
                     SocketAddr::V4(addrv4) => {

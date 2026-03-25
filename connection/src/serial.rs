@@ -1,5 +1,5 @@
 use crate::protocol::proto2025::packet::PACKET_SIZE;
-use crate::{DEFAULT_TIMEOUT, RobotTransceiverAddress, TransceiverMessage};
+use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
 use flume::{Receiver, Sender};
 use log::{error, trace, warn};
 use mio::Interest;
@@ -56,6 +56,13 @@ impl SerialTransceiver {
     }
     pub fn probe_period(&self) -> Duration {
         self.probe_period
+    }
+
+    pub fn set_id_filter(&self, filter: RobotIdFilter) {
+        self.thread_control_channel
+            .send(SerialControlMessage::SetIdFilter(filter))
+            .unwrap();
+        self.thread_control_waker.wake().unwrap();
     }
 
     pub fn set_timeout(&mut self, timeout: Duration) {
@@ -116,6 +123,7 @@ impl Drop for SerialTransceiver {
 enum SerialControlMessage {
     Write(String, Vec<u8>),
     SetProbePeriod(Duration),
+    SetIdFilter(RobotIdFilter),
     SetTimeout(Duration),
     Stop,
 }
@@ -146,6 +154,7 @@ fn serial_mio_thread(
     let mut next_token_num: usize = 1;
 
     let mut configured_probe_period = DEFAULT_PROBE_PERIOD;
+    let mut configured_id_filter = RobotIdFilter::default();
     let mut configured_timeout = DEFAULT_TIMEOUT;
 
     let mut events = mio::Events::with_capacity(64);
@@ -192,6 +201,7 @@ fn serial_mio_thread(
                         &mut active_connections,
                         &mut port_names,
                         msg_callback.clone(),
+                        &configured_id_filter,
                         configured_timeout,
                         time + configured_probe_period - Duration::from_millis(500),
                     ),
@@ -239,6 +249,9 @@ fn serial_mio_thread(
                             }
                             SerialControlMessage::SetProbePeriod(val) => {
                                 configured_probe_period = val
+                            }
+                            SerialControlMessage::SetIdFilter(val) => {
+                                configured_id_filter = val;
                             }
                             SerialControlMessage::SetTimeout(val) => {
                                 configured_timeout = val;
@@ -314,12 +327,14 @@ fn start_discovery(
     SerialDiscoveryStage::Collecting(end_time, discovery_ports)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn end_discovery(
     poll: &mio::Poll,
     discovery_ports: HashMap<mio::Token, (SerialPortInfo, SerialStream)>,
     active_connections: &mut HashMap<mio::Token, SerialConnectionState>,
     port_names: &mut HashMap<String, mio::Token>,
     msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
+    id_filter: &RobotIdFilter,
     initial_timeout: Duration,
     next_start: Instant,
 ) -> SerialDiscoveryStage {
@@ -353,7 +368,9 @@ fn end_discovery(
         }
 
         // Accept or reject the connection
-        if let Some(robot_id) = robot_id {
+        if let Some(robot_id) = robot_id
+            && id_filter.apply(robot_id)
+        {
             let state = SerialConnectionState {
                 port,
                 port_info: port_info.clone(),
