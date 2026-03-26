@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Default, Clone)]
 pub struct ConnectionStats {
-    pub combined_packet_loss: f32,
+    pub round_trip_packet_loss: f32,
     pub rtt_avg: Duration,
     pub rtt_stddev: Duration,
     pub rtt_p99: Duration,
@@ -64,7 +64,7 @@ impl ConnectionStatTracker {
 
         if rtt_buf.is_empty() {
             return ConnectionStats {
-                combined_packet_loss: 1.0,
+                round_trip_packet_loss: 1.0,
                 ..ConnectionStats::default()
             };
         }
@@ -82,7 +82,7 @@ impl ConnectionStatTracker {
         let p75_idx = (rtt_buf.len() as f32 * 0.75) as usize;
 
         ConnectionStats {
-            combined_packet_loss: (self.rtt_history.len() - rtt_buf.len()) as f32
+            round_trip_packet_loss: (self.rtt_history.len() - rtt_buf.len()) as f32
                 / self.rtt_history.len() as f32,
             rtt_avg,
             rtt_stddev,
