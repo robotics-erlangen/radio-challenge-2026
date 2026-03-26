@@ -178,17 +178,8 @@ struct ConnectionPoolInner<P> {
 
 impl<P> ConnectionPoolInner<P> {
     fn update_transceiver_blacklists(&self) {
-        let filter = RobotIdFilter {
-            whitelist: None,
-            blacklist: Some(
-                self.active_connections
-                    .read()
-                    .unwrap()
-                    .keys()
-                    .copied()
-                    .collect(),
-            ),
-        };
+        let filter = RobotIdFilter::new()
+            .with_blacklist(self.active_connections.read().unwrap().keys().copied());
         #[cfg(feature = "serial")]
         self.serial_transceiver
             .get()

@@ -67,15 +67,45 @@ impl From<SocketAddr> for RobotTransceiverAddress {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RobotIdFilter {
-    whitelist: Option<Vec<u8>>,
-    blacklist: Option<Vec<u8>>,
+    whitelist: Option<u32>,
+    blacklist: Option<u32>,
 }
 
 impl RobotIdFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_whitelist(mut self, ids: impl IntoIterator<Item = u8>) -> Self {
+        let mut bits = 0u32;
+        for id in ids {
+            if id < 32 {
+                bits |= 1 << id;
+            }
+        }
+        self.whitelist = Some(bits);
+        self
+    }
+
+    pub fn with_blacklist(mut self, ids: impl IntoIterator<Item = u8>) -> Self {
+        let mut bits = 0u32;
+        for id in ids {
+            if id < 32 {
+                bits |= 1 << id;
+            }
+        }
+        self.blacklist = Some(bits);
+        self
+    }
+
     pub fn apply(&self, id: u8) -> bool {
-        self.whitelist.as_ref().is_none_or(|w| w.contains(&id))
-            && self.blacklist.as_ref().is_none_or(|b| !b.contains(&id))
+        if id > 31 {
+            return false;
+        }
+        let bit = 1 << id;
+        self.whitelist.is_none_or(|w| (w & bit) == 1)
+            && self.blacklist.is_none_or(|b| (b & bit) == 0)
     }
 }
