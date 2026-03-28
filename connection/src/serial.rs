@@ -1,4 +1,3 @@
-use crate::protocol::proto2025::packet::PACKET_SIZE;
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
 use flume::{Receiver, Sender};
 use log::{error, trace, warn};
@@ -14,8 +13,6 @@ use std::{io, thread};
 
 const DEFAULT_PROBE_PERIOD: Duration = Duration::from_millis(2000);
 const BAUD_RATE: u32 = 921600;
-// +1 for checksum, +1 for cobs overhead byte
-const SERIAL_PACKET_SIZE: usize = PACKET_SIZE + 2;
 
 const WAKER_TOKEN: mio::Token = mio::Token(0);
 
@@ -30,13 +27,17 @@ pub struct SerialTransceiver {
 }
 
 impl SerialTransceiver {
-    pub fn start(msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>) -> io::Result<Self> {
+    pub fn start(
+        msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
+        packet_size: usize,
+    ) -> io::Result<Self> {
         let poll = mio::Poll::new()?;
         let waker = mio::Waker::new(poll.registry(), WAKER_TOKEN)?;
 
         let (thread_control_sender, thread_control_receiver) = flume::unbounded();
-        let thread =
-            thread::spawn(move || serial_mio_thread(poll, thread_control_receiver, msg_callback));
+        let thread = thread::spawn(move || {
+            serial_mio_thread(poll, thread_control_receiver, msg_callback, packet_size)
+        });
 
         Ok(Self {
             thread: Some(thread),
@@ -128,12 +129,12 @@ enum SerialControlMessage {
     Stop,
 }
 
+// TODO: Make rx_buf a statically sized array when feature(generic_const_exprs) lands
 #[derive(Debug)]
 struct SerialConnectionState {
     port: SerialStream,
     port_info: SerialPortInfo,
-    // TODO: Support receiving variable sized packets
-    rx_buf: [u8; PACKET_SIZE],
+    rx_buf: Box<[u8]>,
     rx_buf_pos: usize,
     timeout: Instant,
 }
@@ -147,6 +148,7 @@ fn serial_mio_thread(
     mut poll: mio::Poll,
     control_channel: Receiver<SerialControlMessage>,
     msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
+    packet_size: usize,
 ) {
     let mut active_connections: HashMap<mio::Token, SerialConnectionState> = HashMap::new();
     let mut port_names: HashMap<String, mio::Token> = HashMap::new();
@@ -204,6 +206,7 @@ fn serial_mio_thread(
                         &configured_id_filter,
                         configured_timeout,
                         time + configured_probe_period - Duration::from_millis(500),
+                        packet_size,
                     ),
                 }
             }
@@ -240,7 +243,6 @@ fn serial_mio_thread(
                                     continue;
                                 };
 
-                                // TODO: Handle would_block errors per port and resume after writeable event
                                 if let Err(e) = state.port.write_all(&bytes) {
                                     warn!("Failed to send serial packet to {port_name}: {e}");
                                 } else {
@@ -337,6 +339,7 @@ fn end_discovery(
     id_filter: &RobotIdFilter,
     initial_timeout: Duration,
     next_start: Instant,
+    packet_size: usize,
 ) -> SerialDiscoveryStage {
     for (token, (port_info, mut port)) in discovery_ports {
         // Read response
@@ -374,7 +377,7 @@ fn end_discovery(
             let state = SerialConnectionState {
                 port,
                 port_info: port_info.clone(),
-                rx_buf: [0; PACKET_SIZE],
+                rx_buf: vec![0; packet_size + 2].into_boxed_slice(), // +1 for checksum, +1 for cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
                 rx_buf_pos: 0,
                 timeout: Instant::now() + initial_timeout,
             };
@@ -418,7 +421,7 @@ fn receive_serial_packets(
                 }
 
                 // Decode cobs framing
-                let mut decoded = [0u8; SERIAL_PACKET_SIZE - 1];
+                let mut decoded = vec![0u8; state.rx_buf.len() - 1].into_boxed_slice(); // -1 for the removed cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
                 if cobs::decode(&state.rx_buf, &mut decoded).is_err() {
                     state.rx_buf_pos = 0;
                     continue;
@@ -437,7 +440,7 @@ fn receive_serial_packets(
                 state.timeout = Instant::now() + configured_timeout;
                 msg_callback(TransceiverMessage::PacketReceived(
                     RobotTransceiverAddress::Serial(state.port_info.clone()),
-                    (&decoded[0..PACKET_SIZE]).try_into().unwrap(),
+                    (&decoded[..decoded.len() - 1]).into(),
                     Instant::now(),
                 ))
             }

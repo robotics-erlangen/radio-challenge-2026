@@ -268,10 +268,10 @@ impl<
 
         _ = pool_inner
             .serial_transceiver
-            .set(SerialTransceiver::start(msg_handler.clone()).unwrap());
+            .set(SerialTransceiver::start(msg_handler.clone(), P::RESPONSE_PACKET_SIZE).unwrap());
         _ = pool_inner
             .udp_transceiver
-            .set(UdpTransceiver::start(msg_handler.clone()).unwrap());
+            .set(UdpTransceiver::start(msg_handler.clone(), P::RESPONSE_PACKET_SIZE).unwrap());
 
         ConnectionPool {
             inner: pool_inner,

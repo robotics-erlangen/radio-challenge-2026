@@ -1,4 +1,3 @@
-use crate::protocol::proto2025::packet::PACKET_SIZE;
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
 use flume::{Receiver, Sender};
 use log::{error, trace, warn};
@@ -80,11 +79,15 @@ pub struct UdpTransceiver {
     thread_control_waker: mio::Waker,
 
     connection_timeouts: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
+    // Stored here for easy access, the actual timeout used by the thread is updated via control messages
     timeout: Duration,
 }
 
 impl UdpTransceiver {
-    pub fn start(msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>) -> io::Result<Self> {
+    pub fn start(
+        msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
+        packet_size: usize,
+    ) -> io::Result<Self> {
         let connection_timeouts = Arc::new(RwLock::new(HashMap::new()));
 
         // Bind sockets
@@ -120,6 +123,7 @@ impl UdpTransceiver {
                     poll,
                     discovery_sockets,
                     data_sockets,
+                    packet_size,
                     connection_timeouts,
                     msg_callback,
                     thread_control_receiver,
@@ -192,12 +196,14 @@ fn udp_mio_thread(
     mut poll: mio::Poll,
     (discovery_socket_v4, discovery_socket_v6): (UdpSocket, UdpSocket),
     (data_socket_v4, data_socket_v6): (UdpSocket, UdpSocket),
+    packet_size: usize,
     connection_timeouts: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
     msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
     control_channel: Receiver<UdpControlMessage>,
 ) {
     let mut configured_id_filter = RobotIdFilter::default();
     let mut configured_timeout = DEFAULT_TIMEOUT;
+    let mut rx_buf = vec![0u8; packet_size].into_boxed_slice();
 
     let mut events = mio::Events::with_capacity(64);
 
@@ -294,12 +300,14 @@ fn udp_mio_thread(
                 ),
                 DATA_V4_TOKEN => receive_data_packets(
                     &data_socket_v4,
+                    &mut rx_buf,
                     &mut connection_timeouts.write().unwrap(),
                     configured_timeout,
                     msg_callback.clone(),
                 ),
                 DATA_V6_TOKEN => receive_data_packets(
                     &data_socket_v6,
+                    &mut rx_buf,
                     &mut connection_timeouts.write().unwrap(),
                     configured_timeout,
                     msg_callback.clone(),
@@ -311,7 +319,6 @@ fn udp_mio_thread(
 }
 
 fn send_beacon_packets(socket_v4: &UdpSocket, socket_v6: &UdpSocket) {
-    // TODO: Filter loopback interfaces
     let interfaces = NetworkInterface::show().unwrap();
     trace!(
         "Sending udp beacon packets: {}",
@@ -400,24 +407,23 @@ fn receive_discovery_packets(
 
 fn receive_data_packets(
     socket: &UdpSocket,
+    rx_buf: &mut [u8],
     connection_timeouts: &mut HashMap<SocketAddr, Instant>,
     configured_timeout: Duration,
     msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
 ) {
-    // TODO: Arbitrary packet size for protocol flexibility
-    let mut rx_buf = [0u8; PACKET_SIZE];
     loop {
-        match socket.recv_from(&mut rx_buf) {
+        match socket.recv_from(rx_buf) {
             Ok((_, src_addr)) => {
-                let Some(last_received) = connection_timeouts.get_mut(&src_addr) else {
+                let Some(connection_timeout) = connection_timeouts.get_mut(&src_addr) else {
                     continue;
                 };
 
-                *last_received = Instant::now() + configured_timeout;
+                *connection_timeout = Instant::now() + configured_timeout;
                 trace!("Received udp packet from {src_addr}");
                 msg_callback(TransceiverMessage::PacketReceived(
                     RobotTransceiverAddress::Udp(src_addr),
-                    rx_buf,
+                    rx_buf.into(),
                     Instant::now(),
                 ));
             }

@@ -5,8 +5,6 @@ use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use protocol::proto2025::packet::PACKET_SIZE;
-
 pub mod cache;
 pub mod conn_stats;
 pub mod pool;
@@ -31,7 +29,7 @@ pub enum RobotMessage<RR, DR> {
 pub enum TransceiverMessage {
     Connected(RobotTransceiverAddress, u8),
     Disconnected(RobotTransceiverAddress),
-    PacketReceived(RobotTransceiverAddress, [u8; PACKET_SIZE], Instant),
+    PacketReceived(RobotTransceiverAddress, Box<[u8]>, Instant), // TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

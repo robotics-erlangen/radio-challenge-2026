@@ -81,6 +81,8 @@ impl Default for RadioProtocol2025 {
 impl<RC: PacketPacking<PAYLOAD_SIZE>, RR: PacketUnpacking<PAYLOAD_SIZE>>
     RadioProtocol<RC, RR, CommandDatagram, ResponseDatagram> for RadioProtocol2025
 {
+    const RESPONSE_PACKET_SIZE: usize = PAYLOAD_SIZE + 1; // +1 for header
+
     fn stats(&self) -> ConnectionStats {
         self.stat_tracker.get()
     }
