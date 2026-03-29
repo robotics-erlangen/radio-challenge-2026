@@ -1,132 +1,252 @@
+use crate::pool::TokenAllocator;
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
-use flume::{Receiver, Sender};
 use log::{error, trace, warn};
 use mio::Interest;
 pub use mio_serial::SerialPortInfo;
 use mio_serial::{SerialPortType, SerialStream};
 use std::collections::HashMap;
+use std::io;
 use std::io::{ErrorKind, Read, Write};
-use std::sync::Arc;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use std::{io, thread};
 
 const DEFAULT_PROBE_PERIOD: Duration = Duration::from_millis(2000);
 const BAUD_RATE: u32 = 921600;
 
-const WAKER_TOKEN: mio::Token = mio::Token(0);
-
 #[derive(Debug)]
 pub struct SerialTransceiver {
-    thread: Option<JoinHandle<()>>,
-    thread_control_channel: Sender<SerialControlMessage>,
-    thread_control_waker: mio::Waker,
+    active_connections: HashMap<mio::Token, SerialConnectionState>,
+    port_names: HashMap<String, mio::Token>,
 
-    probe_period: Duration,
-    timeout: Duration,
+    active_discovery_ports: Option<Vec<(mio::Token, SerialPortInfo, SerialStream)>>,
+
+    // Timeouts
+    next_discovery_time: Instant,
+    next_conn_timeout: Option<Instant>, //TODO: Somehow enforce updating this cache with active_connections.values().map(|s| s.timeout).min()
+
+    // Config
+    pub probe_period: Duration,
+    pub id_filter: RobotIdFilter,
+    pub timeout: Duration,
+    packet_size: usize,
 }
 
 impl SerialTransceiver {
     pub fn start(
-        msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
+        _poll: &mut mio::Poll,
+        _token_allocator: &mut TokenAllocator,
         packet_size: usize,
     ) -> io::Result<Self> {
-        let poll = mio::Poll::new()?;
-        let waker = mio::Waker::new(poll.registry(), WAKER_TOKEN)?;
-
-        let (thread_control_sender, thread_control_receiver) = flume::unbounded();
-        let thread = thread::spawn(move || {
-            serial_mio_thread(poll, thread_control_receiver, msg_callback, packet_size)
-        });
-
         Ok(Self {
-            thread: Some(thread),
-            thread_control_channel: thread_control_sender,
-            thread_control_waker: waker,
+            active_connections: HashMap::new(),
+            port_names: HashMap::new(),
+            active_discovery_ports: None,
+            next_discovery_time: Instant::now(),
+            next_conn_timeout: None,
             probe_period: DEFAULT_PROBE_PERIOD,
+            id_filter: RobotIdFilter::default(),
             timeout: DEFAULT_TIMEOUT,
+            packet_size,
         })
     }
 
-    pub fn set_probe_period(&mut self, period: Duration) {
-        self.probe_period = period;
-        self.thread_control_channel
-            .send(SerialControlMessage::SetProbePeriod(period))
-            .unwrap();
-        self.thread_control_waker.wake().unwrap();
-    }
-    pub fn probe_period(&self) -> Duration {
-        self.probe_period
+    pub fn next_timeout(&self) -> Instant {
+        self.next_conn_timeout
+            .map(|d| d.min(self.next_discovery_time))
+            .unwrap_or(self.next_discovery_time)
     }
 
-    pub fn set_id_filter(&self, filter: RobotIdFilter) {
-        self.thread_control_channel
-            .send(SerialControlMessage::SetIdFilter(filter))
-            .unwrap();
-        self.thread_control_waker.wake().unwrap();
+    pub fn send_packet(&mut self, port_name: String, packet: &[u8]) {
+        // Check if the connection is active
+        if let Some(state) = self
+            .port_names
+            .get(&port_name)
+            .and_then(|token| self.active_connections.get_mut(token))
+        {
+            // Encode the packet
+            let checksum = packet.iter().fold(0u8, |sum, &x| sum ^ x);
+            let mut packet_bytes = packet.to_vec();
+            packet_bytes.push(checksum);
+
+            let mut encoded_bytes = cobs::encode_vec(&packet_bytes);
+            encoded_bytes.push(0);
+
+            // Write the encoded packet
+            if let Err(e) = state.port.write_all(&encoded_bytes) {
+                warn!("Failed to send serial packet to {port_name}: {e}");
+            } else {
+                trace!("Sent serial packet to {port_name}");
+            }
+        };
     }
 
-    pub fn set_timeout(&mut self, timeout: Duration) {
-        self.timeout = timeout;
-        self.thread_control_channel
-            .send(SerialControlMessage::SetTimeout(timeout))
-            .unwrap();
-        self.thread_control_waker.wake().unwrap();
-    }
-    pub fn timeout(&self) -> Duration {
-        self.timeout
-    }
+    // ======== Timeout handler ========
 
-    fn encode_packet(packet: &[u8]) -> Vec<u8> {
-        let mut bytes = packet.to_vec();
-
-        let checksum = bytes.iter().fold(0u8, |sum, &x| sum ^ x);
-        bytes.push(checksum);
-
-        let mut encoded_bytes = cobs::encode_vec(&bytes);
-        encoded_bytes.push(0);
-        encoded_bytes
-    }
-
-    pub fn send(&self, port_name: String, packet: &[u8]) {
-        self.thread_control_channel
-            .send(SerialControlMessage::Write(
-                port_name,
-                Self::encode_packet(packet),
-            ))
-            .unwrap();
-        self.thread_control_waker.wake().unwrap();
-    }
-
-    /// More efficient version of `send` that only wakes the io thread once
-    pub fn send_batch<'a>(&self, packets: impl IntoIterator<Item = (String, &'a [u8])>) {
-        for (port_name, packet) in packets {
-            self.thread_control_channel
-                .send(SerialControlMessage::Write(
-                    port_name,
-                    Self::encode_packet(packet),
-                ))
-                .unwrap();
+    pub fn mio_timeout(
+        &mut self,
+        now: Instant,
+        mut msg_callback: impl FnMut(TransceiverMessage),
+        poll: &mut mio::Poll,
+        token_allocator: &mut TokenAllocator,
+    ) {
+        // Handle discovery
+        if self.next_discovery_time < now {
+            if let Some(ports) = self.active_discovery_ports.take() {
+                self.end_discovery(poll, ports, &mut msg_callback);
+                self.next_discovery_time += self.probe_period - Duration::from_millis(500);
+            } else {
+                self.active_discovery_ports = Some(self.start_discovery(poll, token_allocator));
+                self.next_discovery_time += Duration::from_millis(500);
+            }
         }
-        self.thread_control_waker.wake().unwrap();
-    }
-}
 
-impl Drop for SerialTransceiver {
-    fn drop(&mut self) {
-        _ = self.thread_control_channel.send(SerialControlMessage::Stop);
-        _ = self.thread_control_waker.wake();
-        // Immediately dropping the waker can cause the event to be lost
-        _ = self.thread.take().unwrap().join();
+        // Check if any connection has timed out
+        if self.next_conn_timeout.is_some_and(|t| t < now) {
+            self.active_connections.retain(|_, state| {
+                if state.timeout < now {
+                    self.port_names.remove(state.port_info.port_name.as_str());
+                    msg_callback(TransceiverMessage::Disconnected(
+                        state.port_info.clone().into(),
+                    ));
+                    false
+                } else {
+                    true
+                }
+            });
+            self.next_conn_timeout = self.active_connections.values().map(|s| s.timeout).min();
+        }
     }
-}
 
-enum SerialControlMessage {
-    Write(String, Vec<u8>),
-    SetProbePeriod(Duration),
-    SetIdFilter(RobotIdFilter),
-    SetTimeout(Duration),
-    Stop,
+    fn start_discovery(
+        &self,
+        poll: &mio::Poll,
+        token_allocator: &mut TokenAllocator,
+    ) -> Vec<(mio::Token, SerialPortInfo, SerialStream)> {
+        let new_ports = mio_serial::available_ports()
+            .unwrap()
+            .into_iter()
+            // Filter by port info
+            .filter(|p| match p.port_type.clone() {
+                SerialPortType::UsbPort(details) => details.product.is_some_and(|p| {
+                    p.to_ascii_lowercase().contains("uart")
+                        || p.to_ascii_lowercase().contains("serial")
+                }),
+                SerialPortType::PciPort => true,
+                _ => false,
+            })
+            // Filter for new ports
+            .filter(|p| {
+                !self
+                    .active_connections
+                    .iter()
+                    .any(|(_, state)| state.port_info.port_name == p.port_name)
+            })
+            // Open the ports
+            .filter_map(|p| {
+                SerialStream::open(&mio_serial::new(&p.port_name, BAUD_RATE))
+                    .inspect_err(|e| warn!("Failed to open serial port {}: {}", p.port_name, e))
+                    .ok()
+                    .map(|a| (p, a))
+            })
+            .collect::<Vec<_>>();
+
+        let mut discovery_ports = Vec::new();
+        for (info, mut port) in new_ports {
+            // Send init message
+            if let Err(e) = port.write_all("start-connection\r".as_bytes()) {
+                warn!(
+                    "Failed to send start-connection command to {}: {e}",
+                    info.port_name
+                );
+                continue;
+            }
+            println!("Sent start-connection command to {}", info.port_name);
+
+            // Register the port with mio and remember it for discovery
+            let token = token_allocator.new_token();
+            if poll
+                .registry()
+                .register(&mut port, token, Interest::READABLE)
+                .is_ok()
+            {
+                discovery_ports.push((token, info, port));
+            }
+        }
+        discovery_ports
+    }
+
+    fn end_discovery(
+        &mut self,
+        poll: &mio::Poll,
+        discovery_ports: Vec<(mio::Token, SerialPortInfo, SerialStream)>,
+        msg_callback: &mut impl FnMut(TransceiverMessage),
+    ) {
+        for (token, port_info, mut port) in discovery_ports {
+            // Read response
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 10];
+            loop {
+                match port.read(&mut chunk) {
+                    Ok(read_bytes) => {
+                        buf.extend_from_slice(&chunk[..read_bytes]);
+                        continue;
+                    }
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                    Err(e) => {
+                        error!(
+                            "Unexpected serial read error on port {}: {e}",
+                            port_info.port_name
+                        )
+                    }
+                }
+            }
+            let string = String::from_utf8(buf).unwrap();
+
+            // Parse response
+            let mut robot_id = None;
+            for line in string.lines() {
+                if let Some(("robot_id", value)) = line.split_once(' ') {
+                    robot_id = value.parse::<u8>().ok();
+                };
+            }
+
+            // Accept or reject the connection
+            if let Some(robot_id) = robot_id
+                && self.id_filter.apply(robot_id)
+            {
+                let state = SerialConnectionState {
+                    port,
+                    port_info: port_info.clone(),
+                    rx_buf: vec![0; self.packet_size + 2].into_boxed_slice(), // +1 for checksum, +1 for cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
+                    rx_buf_pos: 0,
+                    timeout: Instant::now() + self.timeout, // TODO: Maybe separate this? This timeout is for the serial console, not for the normal connection
+                };
+                self.active_connections.insert(token, state);
+                self.port_names.insert(port_info.port_name.clone(), token);
+                msg_callback(TransceiverMessage::Connected(
+                    RobotTransceiverAddress::Serial(port_info),
+                    robot_id,
+                ));
+            } else {
+                poll.registry().deregister(&mut port).unwrap();
+            }
+        }
+    }
+
+    // ======== Readable event handler ========
+
+    pub fn mio_event(
+        &mut self,
+        event: mio::event::Event,
+        msg_callback: impl FnMut(TransceiverMessage),
+    ) {
+        // Filter out discovery tokens, they will be handled separately
+        if let Some(conn) = self.active_connections.get_mut(&event.token()) {
+            conn.receive_serial_packets(self.timeout, msg_callback);
+            if self.next_conn_timeout.is_some_and(|old| conn.timeout < old) {
+                self.next_conn_timeout = Some(conn.timeout);
+            }
+        }
+    }
 }
 
 // TODO: Make rx_buf a statically sized array when feature(generic_const_exprs) lands
@@ -139,318 +259,65 @@ struct SerialConnectionState {
     timeout: Instant,
 }
 
-enum SerialDiscoveryStage {
-    Waiting(Instant),
-    Collecting(Instant, HashMap<mio::Token, (SerialPortInfo, SerialStream)>),
-}
-
-fn serial_mio_thread(
-    mut poll: mio::Poll,
-    control_channel: Receiver<SerialControlMessage>,
-    msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
-    packet_size: usize,
-) {
-    let mut active_connections: HashMap<mio::Token, SerialConnectionState> = HashMap::new();
-    let mut port_names: HashMap<String, mio::Token> = HashMap::new();
-    let mut discovery_stage = SerialDiscoveryStage::Waiting(Instant::now());
-    let mut next_token_num: usize = 1;
-
-    let mut configured_probe_period = DEFAULT_PROBE_PERIOD;
-    let mut configured_id_filter = RobotIdFilter::default();
-    let mut configured_timeout = DEFAULT_TIMEOUT;
-
-    let mut events = mio::Events::with_capacity(64);
-
-    // Listen to io events and periodically probe for new connections
-    loop {
-        let next_discovery_deadline = match discovery_stage {
-            SerialDiscoveryStage::Waiting(i) => i,
-            SerialDiscoveryStage::Collecting(i, _) => i,
-        };
-        let next_conn_deadline = active_connections.values().map(|s| s.timeout).min();
-        let timeout = next_conn_deadline
-            .map(|d| d.min(next_discovery_deadline))
-            .unwrap_or(next_discovery_deadline)
-            .saturating_duration_since(Instant::now());
-
-        if let Err(err) = poll.poll(&mut events, Some(timeout)) {
-            match err.kind() {
-                ErrorKind::Interrupted => continue,
-                ErrorKind::TimedOut => {
-                    // Poll usually returns Ok(()) on timeout, but that isn't guaranteed,
-                    // so we still need to cover this case.
-                }
-                _ => error!("Unexpected socket poll error: {}", err),
-            }
-        }
-
-        if events.is_empty() {
-            // Assume a timeout happened. Poll usually returns Ok(()) on timeout, so we can't check for it explicitly.
-            let now = Instant::now();
-
-            // Handle discovery
-            if next_discovery_deadline < now {
-                discovery_stage = match discovery_stage {
-                    SerialDiscoveryStage::Waiting(time) => start_discovery(
-                        &poll,
-                        &active_connections,
-                        &mut next_token_num,
-                        time + Duration::from_millis(500),
-                    ),
-                    SerialDiscoveryStage::Collecting(time, ports) => end_discovery(
-                        &poll,
-                        ports,
-                        &mut active_connections,
-                        &mut port_names,
-                        msg_callback.clone(),
-                        &configured_id_filter,
-                        configured_timeout,
-                        time + configured_probe_period - Duration::from_millis(500),
-                        packet_size,
-                    ),
-                }
-            }
-
-            // Check if any connection has timed out
-            if next_conn_deadline.is_some_and(|t| t < now) {
-                active_connections.retain(|_, state| {
-                    if state.timeout < now {
-                        port_names.remove(state.port_info.port_name.as_str());
-                        msg_callback(TransceiverMessage::Disconnected(
-                            state.port_info.clone().into(),
-                        ));
-                        false
-                    } else {
-                        true
-                    }
-                });
-            }
-
-            continue;
-        }
-
-        for event in events.iter() {
-            match event.token() {
-                WAKER_TOKEN => {
-                    while let Ok(msg) = control_channel.try_recv() {
-                        match msg {
-                            SerialControlMessage::Write(port_name, bytes) => {
-                                // Check if the connection is active and lock access to the port
-                                let Some(state) = port_names
-                                    .get(&port_name)
-                                    .and_then(|token| active_connections.get_mut(token))
-                                else {
-                                    continue;
-                                };
-
-                                if let Err(e) = state.port.write_all(&bytes) {
-                                    warn!("Failed to send serial packet to {port_name}: {e}");
-                                } else {
-                                    trace!("Sent serial packet to {port_name}");
-                                }
-                            }
-                            SerialControlMessage::SetProbePeriod(val) => {
-                                configured_probe_period = val
-                            }
-                            SerialControlMessage::SetIdFilter(val) => {
-                                configured_id_filter = val;
-                            }
-                            SerialControlMessage::SetTimeout(val) => {
-                                configured_timeout = val;
-                            }
-                            SerialControlMessage::Stop => return,
-                        }
-                    }
-                }
-                serial_token => {
-                    // Filter out discovery tokens, they will be handled separately
-                    if let Some(conn) = active_connections.get_mut(&serial_token) {
-                        receive_serial_packets(conn, configured_timeout, msg_callback.clone())
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn start_discovery(
-    poll: &mio::Poll,
-    active_connections: &HashMap<mio::Token, SerialConnectionState>,
-    next_token_num: &mut usize,
-    end_time: Instant,
-) -> SerialDiscoveryStage {
-    let new_ports = mio_serial::available_ports()
-        .unwrap()
-        .into_iter()
-        // Filter by port info
-        .filter(|p| match p.port_type.clone() {
-            SerialPortType::UsbPort(details) => details.product.is_some_and(|p| {
-                p.to_ascii_lowercase().contains("uart") || p.to_ascii_lowercase().contains("serial")
-            }),
-            SerialPortType::PciPort => true,
-            _ => false,
-        })
-        // Filter for new ports
-        .filter(|p| {
-            !active_connections
-                .iter()
-                .any(|(_, state)| state.port_info.port_name == p.port_name)
-        })
-        // Open the ports
-        .filter_map(|p| {
-            SerialStream::open(&mio_serial::new(&p.port_name, BAUD_RATE))
-                .inspect_err(|e| warn!("Failed to open serial port {}: {}", p.port_name, e))
-                .ok()
-                .map(|a| (p, a))
-        })
-        .collect::<Vec<_>>();
-
-    let mut discovery_ports = HashMap::new();
-    for (info, mut port) in new_ports {
-        if let Err(e) = port.write_all("start-connection\r".as_bytes()) {
-            warn!(
-                "Failed to send start-connection command to {}: {e}",
-                info.port_name
-            );
-            continue;
-        }
-        println!("Sent start-connection command to {}", info.port_name);
-
-        let token = mio::Token(*next_token_num);
-        if poll
-            .registry()
-            .register(&mut port, token, Interest::READABLE)
-            .is_ok()
-        {
-            *next_token_num += 1;
-            discovery_ports.insert(token, (info, port));
-        }
-    }
-    SerialDiscoveryStage::Collecting(end_time, discovery_ports)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn end_discovery(
-    poll: &mio::Poll,
-    discovery_ports: HashMap<mio::Token, (SerialPortInfo, SerialStream)>,
-    active_connections: &mut HashMap<mio::Token, SerialConnectionState>,
-    port_names: &mut HashMap<String, mio::Token>,
-    msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
-    id_filter: &RobotIdFilter,
-    initial_timeout: Duration,
-    next_start: Instant,
-    packet_size: usize,
-) -> SerialDiscoveryStage {
-    for (token, (port_info, mut port)) in discovery_ports {
-        // Read response
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 10];
+impl SerialConnectionState {
+    fn receive_serial_packets(
+        &mut self,
+        configured_timeout: Duration,
+        mut msg_callback: impl FnMut(TransceiverMessage),
+    ) {
         loop {
-            match port.read(&mut chunk) {
+            match self.port.read(&mut self.rx_buf[self.rx_buf_pos..]) {
                 Ok(read_bytes) => {
-                    buf.extend_from_slice(&chunk[..read_bytes]);
-                    continue;
+                    // Handle read
+                    let old_pos = self.rx_buf_pos;
+                    let new_pos = self.rx_buf_pos + read_bytes;
+
+                    // Reset on null byte (cobs packet framing)
+                    let zero_idx = self.rx_buf[old_pos..new_pos].iter().position(|&x| x == 0);
+                    if let Some(rel_idx) = zero_idx {
+                        let idx = old_pos + rel_idx;
+                        self.rx_buf.copy_within(idx..new_pos, 0);
+                        self.rx_buf_pos = new_pos - idx;
+                        continue;
+                    }
+
+                    // Check if the packet is completed
+                    if self.rx_buf_pos < self.rx_buf.len() {
+                        continue;
+                    }
+
+                    // Decode cobs framing
+                    let mut decoded = vec![0u8; self.rx_buf.len() - 1].into_boxed_slice(); // -1 for the removed cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
+                    if cobs::decode(&self.rx_buf, &mut decoded).is_err() {
+                        self.rx_buf_pos = 0;
+                        continue;
+                    };
+                    self.rx_buf_pos = 0;
+
+                    // Verify checksum
+                    let checksum = &decoded[0..decoded.len() - 1]
+                        .iter()
+                        .fold(0u8, |sum, &x| sum ^ x);
+                    if decoded.last().unwrap() != checksum {
+                        self.rx_buf_pos = 0;
+                        continue;
+                    }
+
+                    self.timeout = Instant::now() + configured_timeout;
+                    msg_callback(TransceiverMessage::PacketReceived(
+                        RobotTransceiverAddress::Serial(self.port_info.clone()),
+                        (&decoded[..decoded.len() - 1]).into(),
+                        Instant::now(),
+                    ))
                 }
-                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == ErrorKind::WouldBlock => return,
                 Err(e) => {
                     error!(
                         "Unexpected serial read error on port {}: {e}",
-                        port_info.port_name
-                    )
+                        self.port_info.port_name
+                    );
+                    return;
                 }
-            }
-        }
-        let string = String::from_utf8(buf).unwrap();
-
-        // Parse response
-        let mut robot_id = None;
-        for line in string.lines() {
-            if let Some(("robot_id", value)) = line.split_once(' ') {
-                robot_id = value.parse::<u8>().ok();
-            };
-        }
-
-        // Accept or reject the connection
-        if let Some(robot_id) = robot_id
-            && id_filter.apply(robot_id)
-        {
-            let state = SerialConnectionState {
-                port,
-                port_info: port_info.clone(),
-                rx_buf: vec![0; packet_size + 2].into_boxed_slice(), // +1 for checksum, +1 for cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
-                rx_buf_pos: 0,
-                timeout: Instant::now() + initial_timeout,
-            };
-            active_connections.insert(token, state);
-            port_names.insert(port_info.port_name.clone(), token);
-            msg_callback(TransceiverMessage::Connected(
-                RobotTransceiverAddress::Serial(port_info),
-                robot_id,
-            ));
-        } else {
-            poll.registry().deregister(&mut port).unwrap();
-        }
-    }
-    SerialDiscoveryStage::Waiting(next_start)
-}
-
-fn receive_serial_packets(
-    state: &mut SerialConnectionState,
-    configured_timeout: Duration,
-    msg_callback: Arc<dyn Fn(TransceiverMessage) + Send + Sync>,
-) {
-    loop {
-        match state.port.read(&mut state.rx_buf[state.rx_buf_pos..]) {
-            Ok(read_bytes) => {
-                // Handle read
-                let old_pos = state.rx_buf_pos;
-                let new_pos = state.rx_buf_pos + read_bytes;
-
-                // Reset on null byte (cobs packet framing)
-                let zero_idx = state.rx_buf[old_pos..new_pos].iter().position(|&x| x == 0);
-                if let Some(rel_idx) = zero_idx {
-                    let idx = old_pos + rel_idx;
-                    state.rx_buf.copy_within(idx..new_pos, 0);
-                    state.rx_buf_pos = new_pos - idx;
-                    continue;
-                }
-
-                // Check if the packet is completed
-                if state.rx_buf_pos < state.rx_buf.len() {
-                    continue;
-                }
-
-                // Decode cobs framing
-                let mut decoded = vec![0u8; state.rx_buf.len() - 1].into_boxed_slice(); // -1 for the removed cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
-                if cobs::decode(&state.rx_buf, &mut decoded).is_err() {
-                    state.rx_buf_pos = 0;
-                    continue;
-                };
-                state.rx_buf_pos = 0;
-
-                // Verify checksum
-                let checksum = &decoded[0..decoded.len() - 1]
-                    .iter()
-                    .fold(0u8, |sum, &x| sum ^ x);
-                if decoded.last().unwrap() != checksum {
-                    state.rx_buf_pos = 0;
-                    continue;
-                }
-
-                state.timeout = Instant::now() + configured_timeout;
-                msg_callback(TransceiverMessage::PacketReceived(
-                    RobotTransceiverAddress::Serial(state.port_info.clone()),
-                    (&decoded[..decoded.len() - 1]).into(),
-                    Instant::now(),
-                ))
-            }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => return,
-            Err(e) => {
-                error!(
-                    "Unexpected serial read error on port {}: {e}",
-                    state.port_info.port_name
-                );
-                return;
             }
         }
     }
