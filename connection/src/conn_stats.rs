@@ -76,19 +76,14 @@ impl ConnectionStatTracker {
             .sum::<Duration>()
             / rtt_buf.len() as u32;
 
-        // no len-1 because the cast already truncates the result
-        let p99_idx = (rtt_buf.len() as f32 * 0.99) as usize;
-        let p90_idx = (rtt_buf.len() as f32 * 0.90) as usize;
-        let p75_idx = (rtt_buf.len() as f32 * 0.75) as usize;
-
         ConnectionStats {
             round_trip_packet_loss: (self.rtt_history.len() - rtt_buf.len()) as f32
                 / self.rtt_history.len() as f32,
             rtt_avg,
             rtt_stddev,
-            rtt_p99: rtt_buf[p99_idx..].iter().sum::<Duration>() / (rtt_buf.len() - p99_idx) as u32,
-            rtt_p90: rtt_buf[p90_idx..].iter().sum::<Duration>() / (rtt_buf.len() - p90_idx) as u32,
-            rtt_p75: rtt_buf[p75_idx..].iter().sum::<Duration>() / (rtt_buf.len() - p75_idx) as u32,
+            rtt_p99: rtt_buf[(rtt_buf.len() as f32 * 0.99) as usize],
+            rtt_p90: rtt_buf[(rtt_buf.len() as f32 * 0.90) as usize],
+            rtt_p75: rtt_buf[(rtt_buf.len() as f32 * 0.75) as usize],
         }
     }
 }
