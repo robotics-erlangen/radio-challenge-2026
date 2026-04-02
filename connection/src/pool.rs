@@ -1,4 +1,5 @@
 use crate::conn_stats::ConnectionStats;
+use crate::dual_map::DualHashMap;
 use crate::protocol::{PacketRxResult, RadioProtocol};
 #[cfg(feature = "serial")]
 use crate::serial::SerialTransceiver;
@@ -10,7 +11,6 @@ use crate::{
 use flume::{Receiver, Sender};
 use log::{error, info};
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
@@ -26,7 +26,7 @@ pub struct PeriodicConnectionPool<
 > {
     inner: Arc<ConnectionDriver<RC, RR, DC, DR, P>>,
     packets: Arc<RwLock<HashMap<u8, RC>>>,
-    thread: Option<thread::JoinHandle<()>>,
+    thread: Option<JoinHandle<()>>,
     thread_control_channel: Sender<PeriodicConnectionPoolControlMessage>,
     send_period: Duration,
 }
@@ -189,8 +189,7 @@ pub struct ConnectionDriver<
     thread_control_channel: Sender<ConnectionDriverControlMessage>,
     thread_control_waker: mio::Waker,
 
-    // TODO: Key active connections by both id and transceiver address, like in the serial transceiver. Maybe create DoubleHashMap abstraction?
-    active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>>,
+    active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
 
     /// Merged message stream from all connections
     out_channel: Receiver<RobotMessage<RR, DR>>,
@@ -232,7 +231,7 @@ impl<
 
         let (message_sender, message_receiver) = flume::bounded(100);
         let (thread_control_sender, thread_control_receiver) = flume::bounded(100);
-        let active_connections = Arc::new(RwLock::new(HashMap::new()));
+        let active_connections = Arc::new(RwLock::new(DualHashMap::new()));
 
         let thread = {
             let active_connections = active_connections.clone();
@@ -259,7 +258,7 @@ impl<
     pub fn send_packet(&self, robot_id: u8, packet: RC) {
         let mut conns = self.active_connections.write().unwrap();
         // Feed to the protocol, then send the bytes to the driver thread
-        if let Some((addr, proto)) = conns.get_mut(&robot_id) {
+        if let Some((addr, proto)) = conns.get_prim_mut(&robot_id) {
             let bytes = proto.next_packet(packet);
             self.thread_control_channel
                 .send(ConnectionDriverControlMessage::Send(addr.clone(), bytes))
@@ -270,7 +269,7 @@ impl<
 
     pub fn queue_datagram(&self, robot_id: u8, datagram: DC) {
         let mut conns = self.active_connections.write().unwrap();
-        if let Some((_addr, proto)) = conns.get_mut(&robot_id) {
+        if let Some((_addr, proto)) = conns.get_prim_mut(&robot_id) {
             proto.queue_datagram(datagram);
         }
     }
@@ -287,25 +286,27 @@ impl<
 
     pub fn connection_stats(&self, robot_id: u8) -> Option<ConnectionStats> {
         let conns = self.active_connections.read().unwrap();
-        conns.get(&robot_id).map(|(_, proto)| proto.stats())
+        conns
+            .get_prim(&robot_id)
+            .map(|(_addr, proto)| proto.stats())
     }
 
     pub fn has_robot(&self, robot_id: u8) -> bool {
         let conns = self.active_connections.read().unwrap();
-        conns.contains_key(&robot_id)
+        conns.contains_prim(&robot_id)
     }
     pub fn connected_robots(&self) -> Vec<u8> {
         let conns = self.active_connections.read().unwrap();
-        conns.keys().copied().collect()
+        conns.keys().map(|(id, _addr)| *id).collect()
     }
     pub fn transceiver_addr(&self, robot_id: u8) -> Option<RobotTransceiverAddress> {
         let conns = self.active_connections.read().unwrap();
-        conns.get(&robot_id).map(|(addr, _proto)| addr.clone())
+        conns.get_prim(&robot_id).map(|(addr, _proto)| addr.clone())
     }
 
     fn mio_thread(
         mut poll: mio::Poll,
-        active_connections: Arc<RwLock<HashMap<u8, (RobotTransceiverAddress, P)>>>,
+        active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
         control_channel: Receiver<ConnectionDriverControlMessage>,
         message_sender: Sender<RobotMessage<RR, DR>>,
     ) {
@@ -403,11 +404,9 @@ impl<
             for msg in transceiver_messages {
                 match msg {
                     TransceiverMessage::Connected(addr, robot_id) => {
-                        // Register the new connection
-                        if let Entry::Vacant(e) =
-                            active_connections.write().unwrap().entry(robot_id)
-                        {
-                            e.insert((addr.clone(), P::default()));
+                        let mut active_connections = active_connections.write().unwrap();
+                        if !active_connections.contains_prim(&robot_id) {
+                            active_connections.insert(robot_id, addr.clone(), P::default());
                             message_sender
                                 .send(RobotMessage::Connected(robot_id, addr))
                                 .unwrap();
@@ -415,24 +414,18 @@ impl<
                         update_transceiver_blacklists = true;
                     }
                     TransceiverMessage::Disconnected(addr) => {
-                        // There isn't any explicit protection against duplicate transceiver addresses, so just removing the first one could break
-                        let removed_active = active_connections
-                            .write()
-                            .unwrap()
-                            .extract_if(|_, (a, _)| *a == addr)
-                            .map(|(id, _)| id)
-                            .collect::<Vec<_>>();
-                        for id in removed_active {
-                            message_sender.send(RobotMessage::Disconnected(id)).unwrap();
+                        if let Some((robot_id, _proto)) =
+                            active_connections.write().unwrap().remove_sec(&addr)
+                        {
+                            message_sender
+                                .send(RobotMessage::Disconnected(robot_id))
+                                .unwrap();
                         }
                         update_transceiver_blacklists = true;
                     }
                     TransceiverMessage::PacketReceived(addr, bytes, received_on) => {
-                        if let Some((&robot_id, (_, proto))) = active_connections
-                            .write()
-                            .unwrap()
-                            .iter_mut()
-                            .find(|(_, (a, _))| *a == addr)
+                        if let Some((&robot_id, proto)) =
+                            active_connections.write().unwrap().get_sec_mut(&addr)
                         {
                             match proto.packet_received(&bytes) {
                                 PacketRxResult::Regular(packet) => message_sender
@@ -457,8 +450,13 @@ impl<
             }
 
             if update_transceiver_blacklists {
-                let filter = RobotIdFilter::new()
-                    .with_blacklist(active_connections.read().unwrap().keys().copied());
+                let filter = RobotIdFilter::new().with_blacklist(
+                    active_connections
+                        .read()
+                        .unwrap()
+                        .keys()
+                        .map(|(id, _addr)| *id),
+                );
                 #[cfg(feature = "serial")]
                 {
                     serial_transceiver.id_filter = filter.clone();

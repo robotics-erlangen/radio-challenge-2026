@@ -1,10 +1,10 @@
+use crate::dual_map::DualHashMap;
 use crate::pool::TokenAllocator;
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
 use log::{error, trace, warn};
 use mio::Interest;
 pub use mio_serial::SerialPortInfo;
 use mio_serial::{SerialPortType, SerialStream};
-use std::collections::HashMap;
 use std::io;
 use std::io::{ErrorKind, Read, Write};
 use std::time::{Duration, Instant};
@@ -14,9 +14,7 @@ const BAUD_RATE: u32 = 921600;
 
 #[derive(Debug)]
 pub struct SerialTransceiver {
-    active_connections: HashMap<mio::Token, SerialConnectionState>,
-    port_names: HashMap<String, mio::Token>,
-
+    active_connections: DualHashMap<mio::Token, String, SerialConnectionState>,
     active_discovery_ports: Option<Vec<(mio::Token, SerialPortInfo, SerialStream)>>,
 
     // Timeouts
@@ -37,8 +35,7 @@ impl SerialTransceiver {
         packet_size: usize,
     ) -> io::Result<Self> {
         Ok(Self {
-            active_connections: HashMap::new(),
-            port_names: HashMap::new(),
+            active_connections: DualHashMap::new(),
             active_discovery_ports: None,
             next_discovery_time: Instant::now(),
             next_conn_timeout: None,
@@ -57,11 +54,7 @@ impl SerialTransceiver {
 
     pub fn send_packet(&mut self, port_name: String, packet: &[u8]) {
         // Check if the connection is active
-        if let Some(state) = self
-            .port_names
-            .get(&port_name)
-            .and_then(|token| self.active_connections.get_mut(token))
-        {
+        if let Some((_token, state)) = self.active_connections.get_sec_mut(&port_name) {
             // Encode the packet
             let checksum = packet.iter().fold(0u8, |sum, &x| sum ^ x);
             let mut packet_bytes = packet.to_vec();
@@ -101,9 +94,8 @@ impl SerialTransceiver {
 
         // Check if any connection has timed out
         if self.next_conn_timeout.is_some_and(|t| t < now) {
-            self.active_connections.retain(|_, state| {
+            self.active_connections.retain(|_, _, state| {
                 if state.timeout < now {
-                    self.port_names.remove(state.port_info.port_name.as_str());
                     msg_callback(TransceiverMessage::Disconnected(
                         state.port_info.clone().into(),
                     ));
@@ -134,12 +126,7 @@ impl SerialTransceiver {
                 _ => false,
             })
             // Filter for new ports
-            .filter(|p| {
-                !self
-                    .active_connections
-                    .iter()
-                    .any(|(_, state)| state.port_info.port_name == p.port_name)
-            })
+            .filter(|p| !self.active_connections.contains_sec(&p.port_name))
             // Open the ports
             .filter_map(|p| {
                 SerialStream::open(&mio_serial::new(&p.port_name, BAUD_RATE))
@@ -220,8 +207,8 @@ impl SerialTransceiver {
                     rx_buf_pos: 0,
                     timeout: Instant::now() + self.timeout, // TODO: Maybe separate this? This timeout is for the serial console, not for the normal connection
                 };
-                self.active_connections.insert(token, state);
-                self.port_names.insert(port_info.port_name.clone(), token);
+                self.active_connections
+                    .insert(token, port_info.port_name.clone(), state);
                 msg_callback(TransceiverMessage::Connected(
                     RobotTransceiverAddress::Serial(port_info),
                     robot_id,
@@ -240,7 +227,7 @@ impl SerialTransceiver {
         msg_callback: impl FnMut(TransceiverMessage),
     ) {
         // Filter out discovery tokens, they will be handled separately
-        if let Some(conn) = self.active_connections.get_mut(&event.token()) {
+        if let Some((_port_name, conn)) = self.active_connections.get_prim_mut(&event.token()) {
             conn.receive_serial_packets(self.timeout, msg_callback);
             if self.next_conn_timeout.is_some_and(|old| conn.timeout < old) {
                 self.next_conn_timeout = Some(conn.timeout);

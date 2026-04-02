@@ -1,12 +1,14 @@
 #[cfg(feature = "serial")]
 use mio_serial::SerialPortInfo;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 #[cfg(feature = "udp")]
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 pub mod cache;
 pub mod conn_stats;
+mod dual_map;
 pub mod pool;
 pub mod protocol;
 #[cfg(feature = "serial")]
@@ -38,6 +40,17 @@ pub enum RobotTransceiverAddress {
     Serial(SerialPortInfo),
     #[cfg(feature = "udp")]
     Udp(SocketAddr),
+}
+
+impl Hash for RobotTransceiverAddress {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            #[cfg(feature = "serial")]
+            RobotTransceiverAddress::Serial(port) => port.port_name.hash(state),
+            #[cfg(feature = "udp")]
+            RobotTransceiverAddress::Udp(ip) => ip.hash(state),
+        }
+    }
 }
 
 impl Display for RobotTransceiverAddress {
