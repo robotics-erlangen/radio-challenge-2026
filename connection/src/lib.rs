@@ -8,15 +8,15 @@ use std::time::{Duration, Instant};
 
 pub mod cache;
 pub mod conn_stats;
+pub mod driver;
 mod dual_map;
-pub mod pool;
+pub mod periodic;
 pub mod protocol;
 #[cfg(feature = "serial")]
 pub mod serial;
 #[cfg(feature = "udp")]
 pub mod udp;
 
-const DEFAULT_SEND_PERIOD: Duration = Duration::from_millis(10);
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Debug)]

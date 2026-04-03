@@ -1,7 +1,7 @@
 use crate::{RobotMessage, RobotTransceiverAddress};
 use std::collections::HashMap;
 
-/// Cache that can keep track of the transient data that is sent with ConnectionPool messages, like received responses and the connection type
+/// Cache that can keep track of the transient data that is sent with ConnectionDriver messages, like received responses and the connection type
 #[derive(Clone, Debug, Default)]
 pub struct ConnectionStateCache<RR> {
     connected_robots: HashMap<u8, RobotConnState<RR>>,

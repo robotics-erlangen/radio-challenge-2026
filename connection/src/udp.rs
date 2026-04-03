@@ -1,4 +1,4 @@
-use crate::pool::TokenAllocator;
+use crate::driver::TokenAllocator;
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
 use log::{error, trace, warn};
 use mio::Interest;
