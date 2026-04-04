@@ -52,9 +52,9 @@ impl SerialTransceiver {
             .unwrap_or(self.next_discovery_time)
     }
 
-    pub fn send_packet(&mut self, port_name: String, packet: &[u8]) {
+    pub fn send_packet(&mut self, port_name: &str, packet: &[u8]) {
         // Check if the connection is active
-        if let Some((_token, state)) = self.active_connections.get_sec_mut(&port_name) {
+        if let Some((_token, state)) = self.active_connections.get_sec_mut(port_name) {
             // Encode the packet
             let checksum = packet.iter().fold(0u8, |sum, &x| sum ^ x);
             let mut packet_bytes = packet.to_vec();
@@ -85,7 +85,8 @@ impl SerialTransceiver {
         if self.next_discovery_time < now {
             if let Some(ports) = self.active_discovery_ports.take() {
                 self.end_discovery(poll, ports, &mut msg_callback);
-                self.next_discovery_time += self.probe_period - Duration::from_millis(500);
+                self.next_discovery_time +=
+                    self.probe_period.saturating_sub(Duration::from_millis(500));
             } else {
                 self.active_discovery_ports = Some(self.start_discovery(poll, token_allocator));
                 self.next_discovery_time += Duration::from_millis(500);
@@ -114,7 +115,7 @@ impl SerialTransceiver {
         token_allocator: &mut TokenAllocator,
     ) -> Vec<(mio::Token, SerialPortInfo, SerialStream)> {
         let new_ports = mio_serial::available_ports()
-            .unwrap()
+            .expect("Failed to list serial ports")
             .into_iter()
             // Filter by port info
             .filter(|p| match p.port_type.clone() {
@@ -137,16 +138,16 @@ impl SerialTransceiver {
             .collect::<Vec<_>>();
 
         let mut discovery_ports = Vec::new();
-        for (info, mut port) in new_ports {
+        for (port_info, mut port) in new_ports {
             // Send init message
             if let Err(e) = port.write_all("start-connection\r".as_bytes()) {
                 warn!(
                     "Failed to send start-connection command to {}: {e}",
-                    info.port_name
+                    port_info.port_name
                 );
                 continue;
             }
-            println!("Sent start-connection command to {}", info.port_name);
+            trace!("Sent start-connection command to {}", port_info.port_name);
 
             // Register the port with mio and remember it for discovery
             let token = token_allocator.new_token();
@@ -155,7 +156,7 @@ impl SerialTransceiver {
                 .register(&mut port, token, Interest::READABLE)
                 .is_ok()
             {
-                discovery_ports.push((token, info, port));
+                discovery_ports.push((token, port_info, port));
             }
         }
         discovery_ports
@@ -167,22 +168,24 @@ impl SerialTransceiver {
         discovery_ports: Vec<(mio::Token, SerialPortInfo, SerialStream)>,
         msg_callback: &mut impl FnMut(TransceiverMessage),
     ) {
-        for (token, port_info, mut port) in discovery_ports {
+        'ports: for (token, port_info, mut port) in discovery_ports {
             // Read response
             let mut buf = Vec::new();
             let mut chunk = [0u8; 10];
             loop {
+                // Read a single data chunk and append it to the buffer. The chunking is necessary because the read call requires a fixed-size buffer.
                 match port.read(&mut chunk) {
-                    Ok(read_bytes) => {
+                    Ok(read_bytes) if read_bytes > 0 => {
                         buf.extend_from_slice(&chunk[..read_bytes]);
-                        continue;
                     }
+                    Ok(_) /*if read_bytes == 0*/ => break,
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                     Err(e) => {
                         error!(
                             "Unexpected serial read error on port {}: {e}",
                             port_info.port_name
-                        )
+                        );
+                        continue 'ports;
                     }
                 }
             }
@@ -205,8 +208,13 @@ impl SerialTransceiver {
                     port_info: port_info.clone(),
                     rx_buf: vec![0; self.packet_size + 2].into_boxed_slice(), // +1 for checksum, +1 for cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
                     rx_buf_pos: 0,
-                    timeout: Instant::now() + self.timeout, // TODO: Maybe separate this? This timeout is for the serial console, not for the normal connection
+                    timeout: Instant::now() + self.timeout,
                 };
+                self.next_conn_timeout = Some(
+                    self.next_conn_timeout
+                        .map(|t| t.min(state.timeout))
+                        .unwrap_or(state.timeout),
+                );
                 self.active_connections
                     .insert(token, port_info.port_name.clone(), state);
                 msg_callback(TransceiverMessage::Connected(
@@ -257,14 +265,16 @@ impl SerialConnectionState {
                 Ok(read_bytes) => {
                     // Handle read
                     let old_pos = self.rx_buf_pos;
-                    let new_pos = self.rx_buf_pos + read_bytes;
+                    self.rx_buf_pos += read_bytes;
 
                     // Reset on null byte (cobs packet framing)
-                    let zero_idx = self.rx_buf[old_pos..new_pos].iter().position(|&x| x == 0);
+                    let zero_idx = self.rx_buf[old_pos..self.rx_buf_pos]
+                        .iter()
+                        .position(|&x| x == 0);
                     if let Some(rel_idx) = zero_idx {
                         let idx = old_pos + rel_idx;
-                        self.rx_buf.copy_within(idx..new_pos, 0);
-                        self.rx_buf_pos = new_pos - idx;
+                        self.rx_buf.copy_within(idx..self.rx_buf_pos, 0);
+                        self.rx_buf_pos -= idx;
                         continue;
                     }
 
@@ -272,21 +282,19 @@ impl SerialConnectionState {
                     if self.rx_buf_pos < self.rx_buf.len() {
                         continue;
                     }
+                    self.rx_buf_pos = 0;
 
                     // Decode cobs framing
                     let mut decoded = vec![0u8; self.rx_buf.len() - 1].into_boxed_slice(); // -1 for the removed cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
                     if cobs::decode(&self.rx_buf, &mut decoded).is_err() {
-                        self.rx_buf_pos = 0;
                         continue;
                     };
-                    self.rx_buf_pos = 0;
 
                     // Verify checksum
                     let checksum = &decoded[0..decoded.len() - 1]
                         .iter()
                         .fold(0u8, |sum, &x| sum ^ x);
                     if decoded.last().unwrap() != checksum {
-                        self.rx_buf_pos = 0;
                         continue;
                     }
 

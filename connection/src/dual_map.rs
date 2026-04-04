@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 /// A map where each value can be retrieved by two independent keys.
+/// Lookups for a primary key are faster than those for a secondary key.
 #[derive(Debug, Clone)]
 pub struct DualHashMap<K1, K2, V> {
     sec_to_prim: HashMap<K2, K1>,

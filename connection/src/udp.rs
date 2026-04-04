@@ -40,13 +40,23 @@ const DATA_PORT: u16 = 11001;
 const DISCOVERY_BIND_RANGE: Range<u16> = 12000..12010;
 const DATA_BIND_RANGE: Range<u16> = 12010..12020;
 
-fn bind_from_range(port_range: Range<u16>) -> Option<(UdpSocket, UdpSocket)> {
-    port_range.into_iter().find_map(|port| {
-        Some((
-            bind_ipv4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).ok()?,
-            bind_ipv6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0)).ok()?,
-        ))
-    })
+/// Tries to bind a pair of ipv4 and ipv6 udp sockets to the same port, returning the last error if all ports in the given range fail.
+fn bind_from_range(port_range: Range<u16>) -> io::Result<(UdpSocket, UdpSocket)> {
+    let mut last_err = io::Error::new(ErrorKind::InvalidInput, "empty port range");
+
+    port_range
+        .into_iter()
+        .find_map(|port| {
+            Some((
+                bind_ipv4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
+                    .map_err(|e| last_err = e)
+                    .ok()?,
+                bind_ipv6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0))
+                    .map_err(|e| last_err = e)
+                    .ok()?,
+            ))
+        })
+        .ok_or(last_err)
 }
 fn bind_ipv4(addr: SocketAddrV4) -> io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
@@ -101,8 +111,8 @@ impl UdpTransceiver {
         let data_v6_token = token_allocator.new_token();
 
         // Bind sockets
-        let mut discovery_sockets = bind_from_range(DISCOVERY_BIND_RANGE).unwrap();
-        let mut data_sockets = bind_from_range(DATA_BIND_RANGE).unwrap();
+        let mut discovery_sockets = bind_from_range(DISCOVERY_BIND_RANGE)?;
+        let mut data_sockets = bind_from_range(DATA_BIND_RANGE)?;
 
         // Register the sockets to the caller's poll instance
         poll.registry().register(
@@ -158,16 +168,16 @@ impl UdpTransceiver {
             .map_or(self.next_beacon_time, |t| t.min(self.next_beacon_time))
     }
 
-    pub fn send_packet(&mut self, addr: SocketAddr, bytes: Vec<u8>) {
+    pub fn send_packet(&mut self, addr: SocketAddr, bytes: &[u8]) {
         // Check if the socket address is known
         if !self.connection_timeouts.contains_key(&addr) {
             return;
         }
 
         let result = if addr.is_ipv4() {
-            self.data_socket_v4.socket.send_to(&bytes, addr)
+            self.data_socket_v4.socket.send_to(bytes, addr)
         } else {
-            self.data_socket_v6.socket.send_to(&bytes, addr)
+            self.data_socket_v6.socket.send_to(bytes, addr)
         };
 
         if let Err(e) = result {
@@ -201,7 +211,7 @@ impl UdpTransceiver {
     }
 
     fn send_beacon_packets(&self) {
-        let interfaces = NetworkInterface::show().unwrap();
+        let interfaces = NetworkInterface::show().expect("Failed to list network interfaces");
         trace!(
             "Sending udp beacon packets: {}",
             interfaces

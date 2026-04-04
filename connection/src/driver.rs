@@ -6,7 +6,7 @@ use crate::serial::SerialTransceiver;
 #[cfg(feature = "udp")]
 use crate::udp::UdpTransceiver;
 use crate::{RobotIdFilter, RobotMessage, RobotTransceiverAddress, TransceiverMessage};
-use flume::{Receiver, Sender};
+use flume::{Receiver, Sender, TrySendError};
 use log::{error, info};
 use std::io::ErrorKind;
 use std::marker::PhantomData;
@@ -110,15 +110,20 @@ impl<
     }
 
     pub fn send_packet(&self, robot_id: u8, packet: RC) {
-        let mut conns = self.active_connections.write().unwrap();
-        // Feed to the protocol, then send the bytes to the driver thread
-        if let Some((addr, proto)) = conns.get_prim_mut(&robot_id) {
-            let bytes = proto.next_packet(packet);
-            self.thread_control_channel
-                .send(ConnectionDriverControlMessage::Send(addr.clone(), bytes))
-                .unwrap();
-            self.thread_control_waker.wake().unwrap();
-        }
+        let (addr, bytes) = {
+            let mut conns = self.active_connections.write().unwrap();
+            if let Some((addr, proto)) = conns.get_prim_mut(&robot_id) {
+                (addr.clone(), proto.next_packet(packet))
+            } else {
+                // No connection for this robot id
+                return;
+            }
+        };
+        // Send the packet to the mio thread. It is important to release active_connections before sending because the bounded channel blocks if full and the thread can't process the messages while active_connections is locked.
+        self.thread_control_channel
+            .send(ConnectionDriverControlMessage::Send(addr.clone(), bytes))
+            .unwrap();
+        self.thread_control_waker.wake().unwrap();
     }
 
     pub fn queue_datagram(&self, robot_id: u8, datagram: DC) {
@@ -166,15 +171,15 @@ impl<
     ) {
         let mut events = mio::Events::with_capacity(64);
 
-        let mut token_allocator = TokenAllocator(1); // 0 is reserved for the waker
+        let mut token_allocator = TokenAllocator(WAKER_TOKEN.0 + 1); // The waker is usually 0
         #[cfg(feature = "serial")]
         let mut serial_transceiver =
             SerialTransceiver::start(&mut poll, &mut token_allocator, P::RESPONSE_PACKET_SIZE)
-                .unwrap();
+                .expect("Failed to start serial transceiver");
         #[cfg(feature = "udp")]
         let mut udp_transceiver =
             UdpTransceiver::start(&mut poll, &mut token_allocator, P::RESPONSE_PACKET_SIZE)
-                .unwrap();
+                .expect("Failed to start UDP transceiver");
 
         loop {
             // Get the closest transceiver timeout
@@ -204,10 +209,8 @@ impl<
             let mut transceiver_messages = Vec::new();
 
             // Handle timeouts
-            if events.is_empty() {
-                // Assume a timeout happened. Poll usually returns Ok(()) on timeout, so we can't check for it explicitly.
-                let now = Instant::now();
-
+            let now = Instant::now();
+            if next_timeout.is_some_and(|t| t <= now) {
                 #[cfg(feature = "serial")]
                 serial_transceiver.mio_timeout(
                     now,
@@ -229,12 +232,11 @@ impl<
                                 ConnectionDriverControlMessage::Send(addr, bytes) => match addr {
                                     #[cfg(feature = "serial")]
                                     RobotTransceiverAddress::Serial(port_info) => {
-                                        serial_transceiver
-                                            .send_packet(port_info.port_name.clone(), &bytes)
+                                        serial_transceiver.send_packet(&port_info.port_name, &bytes)
                                     }
                                     #[cfg(feature = "udp")]
                                     RobotTransceiverAddress::Udp(addr) => {
-                                        udp_transceiver.send_packet(addr, bytes)
+                                        udp_transceiver.send_packet(addr, &bytes)
                                     }
                                 },
                                 ConnectionDriverControlMessage::Stop => return,
@@ -261,9 +263,10 @@ impl<
                         let mut active_connections = active_connections.write().unwrap();
                         if !active_connections.contains_prim(&robot_id) {
                             active_connections.insert(robot_id, addr.clone(), P::default());
+                            // Block on full channel because Connected messages can't be lost
                             message_sender
                                 .send(RobotMessage::Connected(robot_id, addr))
-                                .unwrap();
+                                .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                         }
                         update_transceiver_blacklists = true;
                     }
@@ -271,9 +274,10 @@ impl<
                         if let Some((robot_id, _proto)) =
                             active_connections.write().unwrap().remove_sec(&addr)
                         {
+                            // Block on full channel because Disconnected messages can't be lost
                             message_sender
                                 .send(RobotMessage::Disconnected(robot_id))
-                                .unwrap();
+                                .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                         }
                         update_transceiver_blacklists = true;
                     }
@@ -282,20 +286,25 @@ impl<
                             active_connections.write().unwrap().get_sec_mut(&addr)
                         {
                             match proto.packet_received(&bytes) {
-                                PacketRxResult::Regular(packet) => message_sender
-                                    .send(RobotMessage::PacketReceived(
+                                // Don't block if the channel is full because some package loss is acceptable for regular packets
+                                PacketRxResult::Regular(packet) => match message_sender
+                                    .try_send(RobotMessage::PacketReceived(
                                         robot_id,
                                         packet,
                                         received_on,
-                                    ))
-                                    .unwrap(),
+                                    )) {
+                                        Ok(_) => {}
+                                        Err(TrySendError::Full(_)) => error!("Dropping received packet from robot {} because the message channel is full", robot_id),
+                                        Err(_) => panic!("ConnectionDriver message receiver dropped before stopping the mio thread"),
+                                    },
+                                // Block on full channel because Datagram messages can't be lost
                                 PacketRxResult::Datagram(dgram) => message_sender
                                     .send(RobotMessage::DatagramReceived(
                                         robot_id,
                                         dgram,
                                         received_on,
                                     ))
-                                    .unwrap(),
+                                    .expect("ConnectionDriver message receiver dropped before stopping the mio thread"),
                                 PacketRxResult::IncompleteDatagram => {}
                             }
                         };

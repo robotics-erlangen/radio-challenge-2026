@@ -116,7 +116,7 @@ impl RobotIdFilter {
             return false;
         }
         let bit = 1 << id;
-        self.whitelist.is_none_or(|w| (w & bit) == 1)
+        self.whitelist.is_none_or(|w| (w & bit) != 0)
             && self.blacklist.is_none_or(|b| (b & bit) == 0)
     }
 }
