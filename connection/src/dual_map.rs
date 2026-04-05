@@ -167,105 +167,30 @@ where
     // ==========================================
 
     /// An iterator visiting all entries `(&K1, &K2, &V)` in arbitrary order.
-    pub fn iter(&self) -> Iter<'_, K1, K2, V> {
-        Iter {
-            inner: self.prim_to_val.iter(),
-        }
+    pub fn iter(&self) -> impl Iterator<Item = (&'_ K1, &'_ K2, &'_ V)> {
+        self.prim_to_val.iter().map(|(k1, (k2, v))| (k1, k2, v))
     }
 
     /// An iterator visiting all entries `(&K1, &K2, &mut V)` in arbitrary order, with a mutable reference to the value.
-    pub fn iter_mut(&mut self) -> IterMut<'_, K1, K2, V> {
-        IterMut {
-            inner: self.prim_to_val.iter_mut(),
-        }
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&'_ K1, &'_ K2, &'_ mut V)> {
+        // The reborrow is needed because the keys can only be modified through insert/remove
+        self.prim_to_val
+            .iter_mut()
+            .map(|(k1, (k2, v))| (k1, &*k2, v))
     }
 
     /// An iterator visiting all key pairs `(&K1, &K2)` in arbitrary order.
-    pub fn keys(&self) -> Keys<'_, K1, K2, V> {
-        Keys {
-            inner: self.prim_to_val.iter(),
-        }
+    pub fn keys(&self) -> impl Iterator<Item = (&'_ K1, &'_ K2)> {
+        self.prim_to_val.iter().map(|(k1, (k2, _))| (k1, k2))
     }
 
     /// An iterator visiting all values in arbitrary order.
-    pub fn values(&self) -> Values<'_, K1, K2, V> {
-        Values {
-            inner: self.prim_to_val.iter(),
-        }
+    pub fn values(&self) -> impl Iterator<Item = &'_ V> {
+        self.prim_to_val.iter().map(|(_k1, (_k2, v))| v)
     }
 
     /// An iterator visiting all values mutably in arbitrary order.
-    pub fn values_mut(&mut self) -> ValuesMut<'_, K1, K2, V> {
-        ValuesMut {
-            inner: self.prim_to_val.iter_mut(),
-        }
-    }
-}
-
-// ==========================================
-
-/// An iterator over the entries of a `DualHashMap`.
-pub struct Iter<'a, K1, K2, V> {
-    inner: std::collections::hash_map::Iter<'a, K1, (K2, V)>,
-}
-
-impl<'a, K1, K2, V> Iterator for Iter<'a, K1, K2, V> {
-    type Item = (&'a K1, &'a K2, &'a V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k1, (k2, v))| (k1, k2, v))
-    }
-}
-
-/// A mutable iterator over the entries of a `DualHashMap`.
-pub struct IterMut<'a, K1, K2, V> {
-    inner: std::collections::hash_map::IterMut<'a, K1, (K2, V)>,
-}
-
-impl<'a, K1, K2, V> Iterator for IterMut<'a, K1, K2, V> {
-    type Item = (&'a K1, &'a K2, &'a mut V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // The reborrow is needed because the keys can only be modified through insert/remove
-        self.inner.next().map(|(k1, (k2, v))| (k1, &*k2, v))
-    }
-}
-
-/// An iterator over the key pairs of a `DualHashMap`.
-pub struct Keys<'a, K1, K2, V> {
-    inner: std::collections::hash_map::Iter<'a, K1, (K2, V)>,
-}
-
-impl<'a, K1, K2, V> Iterator for Keys<'a, K1, K2, V> {
-    type Item = (&'a K1, &'a K2);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k1, (k2, _))| (k1, k2))
-    }
-}
-
-/// An iterator over the values of a `DualHashMap`.
-pub struct Values<'a, K1, K2, V> {
-    inner: std::collections::hash_map::Iter<'a, K1, (K2, V)>,
-}
-
-impl<'a, K1, K2, V> Iterator for Values<'a, K1, K2, V> {
-    type Item = &'a V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(_k1, (_k2, v))| v)
-    }
-}
-
-/// A mutable iterator over the values of a `DualHashMap`.
-pub struct ValuesMut<'a, K1, K2, V> {
-    inner: std::collections::hash_map::IterMut<'a, K1, (K2, V)>,
-}
-
-impl<'a, K1, K2, V> Iterator for ValuesMut<'a, K1, K2, V> {
-    type Item = &'a mut V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(_k1, (_k2, v))| v)
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &'_ mut V> {
+        self.prim_to_val.iter_mut().map(|(_k1, (_k2, v))| v)
     }
 }
