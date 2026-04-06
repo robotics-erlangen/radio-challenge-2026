@@ -7,7 +7,7 @@ rust-version.workspace = true
 [features]
 default = ["serial", "udp"]
 serial = ["dep:mio", "dep:mio-serial", "dep:cobs"]
-udp = ["dep:mio", "mio/net", "dep:network-interface"]
+udp = ["dep:mio", "mio/net", "dep:socket2", "dep:network-interface"]
 
 [dependencies]
 flume.workspace = true
@@ -22,5 +22,5 @@ cobs = { workspace = true, optional = true }
 mio-serial = { workspace = true, optional = true }
 
 # Udp
-socket2.workspace = true
+socket2 = { workspace = true, optional = true }
 network-interface = { workspace = true, optional = true }
