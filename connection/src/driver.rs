@@ -285,7 +285,7 @@ impl<
                         if let Some((&robot_id, proto)) =
                             active_connections.write().unwrap().get_sec_mut(&addr)
                         {
-                            match proto.packet_received(&bytes) {
+                            match proto.packet_received(&bytes, received_on) {
                                 // Don't block if the channel is full because some package loss is acceptable for regular packets
                                 PacketRxResult::Regular(packet) => match message_sender
                                     .try_send(RobotMessage::PacketReceived(

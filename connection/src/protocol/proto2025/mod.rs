@@ -4,6 +4,7 @@ use crate::protocol::proto2025::packet::*;
 use crate::protocol::{PacketRxResult, RadioProtocol};
 use datagrams::{CommandDatagram, CommandDatagramType, ResponseDatagram, ResponseDatagramType};
 use std::collections::VecDeque;
+use std::time::Instant;
 
 pub mod datagrams;
 pub mod packet;
@@ -29,7 +30,7 @@ impl RadioProtocol2025 {
     pub(crate) fn new() -> Self {
         Self {
             counter: 0,
-            stat_tracker: ConnectionStatTracker::new(100),
+            stat_tracker: ConnectionStatTracker::new(100, 5),
             datagram_queue: VecDeque::new(),
             datagram_chunk_queue: VecDeque::new(),
             sent_datagram_packet: None,
@@ -88,11 +89,15 @@ impl<RC: PacketPacking<PAYLOAD_SIZE>, RR: PacketUnpacking<PAYLOAD_SIZE>>
     }
 
     /// Unpacks a packet and updates internal connection state
-    fn packet_received(&mut self, bytes: &[u8]) -> PacketRxResult<RR, ResponseDatagram> {
+    fn packet_received(
+        &mut self,
+        bytes: &[u8],
+        timestamp: Instant,
+    ) -> PacketRxResult<RR, ResponseDatagram> {
         let header = PacketHeader::unpack(bytes).unwrap();
 
         // Update the stat tracker
-        self.stat_tracker.received();
+        self.stat_tracker.received(header.counter as u32, timestamp);
 
         // Handle ack
         if let Some(sent_datagram_packet) = &self.sent_datagram_packet
@@ -187,7 +192,8 @@ impl<RC: PacketPacking<PAYLOAD_SIZE>, RR: PacketUnpacking<PAYLOAD_SIZE>>
             regular_data.pack_to_slice(&mut packet[1..]);
         };
 
-        self.stat_tracker.sent();
+        self.stat_tracker
+            .sent(header.counter as u32, Instant::now());
         packet
     }
 }
