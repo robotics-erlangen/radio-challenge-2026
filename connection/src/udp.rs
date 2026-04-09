@@ -1,5 +1,5 @@
 use crate::driver::TokenAllocator;
-use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverMessage};
+use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverEvent};
 use log::{error, trace, warn};
 use mio::Interest;
 use mio::net::UdpSocket;
@@ -189,12 +189,12 @@ impl UdpTransceiver {
 
     // ======== Timeout handler ========
 
-    pub fn mio_timeout(&mut self, now: Instant, mut msg_callback: impl FnMut(TransceiverMessage)) {
+    pub fn mio_timeout(&mut self, now: Instant, mut msg_callback: impl FnMut(TransceiverEvent)) {
         // Check if any connection has timed out
         if self.next_conn_timeout.is_some_and(|t| t < now) {
             self.connection_timeouts.retain(|&addr, t| {
                 if *t < now {
-                    msg_callback(TransceiverMessage::Disconnected(addr.into()));
+                    msg_callback(TransceiverEvent::Disconnected(addr.into()));
                     false
                 } else {
                     true
@@ -258,7 +258,7 @@ impl UdpTransceiver {
     pub fn mio_event(
         &mut self,
         event: mio::event::Event,
-        msg_callback: impl FnMut(TransceiverMessage),
+        msg_callback: impl FnMut(TransceiverEvent),
     ) {
         let token = event.token();
 
@@ -281,7 +281,7 @@ impl UdpTransceiver {
     fn receive_discovery_packets(
         &mut self,
         v6: bool,
-        mut msg_callback: impl FnMut(TransceiverMessage),
+        mut msg_callback: impl FnMut(TransceiverEvent),
     ) {
         let mut rx_buf = [0u8; 1];
         let socket = if v6 {
@@ -314,7 +314,7 @@ impl UdpTransceiver {
                     // Insert into the connection map
                     if let Entry::Vacant(e) = self.connection_timeouts.entry(data_addr) {
                         e.insert(Instant::now() + self.timeout);
-                        msg_callback(TransceiverMessage::Connected(
+                        msg_callback(TransceiverEvent::Connected(
                             RobotTransceiverAddress::Udp(data_addr),
                             robot_id,
                         ));
@@ -326,7 +326,7 @@ impl UdpTransceiver {
         }
     }
 
-    fn receive_data_packets(&mut self, v6: bool, mut msg_callback: impl FnMut(TransceiverMessage)) {
+    fn receive_data_packets(&mut self, v6: bool, mut msg_callback: impl FnMut(TransceiverEvent)) {
         let socket = if v6 {
             &self.data_socket_v6.socket
         } else {
@@ -343,7 +343,7 @@ impl UdpTransceiver {
 
                     *connection_timeout = Instant::now() + self.timeout;
                     trace!("Received udp packet from {src_addr}");
-                    msg_callback(TransceiverMessage::PacketReceived(
+                    msg_callback(TransceiverEvent::PacketReceived(
                         RobotTransceiverAddress::Udp(src_addr),
                         self.rx_buf.clone(),
                         Instant::now(),

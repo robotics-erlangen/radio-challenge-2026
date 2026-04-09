@@ -1,7 +1,7 @@
 use crate::conn_stats::ConnectionStats;
 use crate::driver::ConnectionDriver;
 use crate::protocol::RadioProtocol;
-use crate::{RobotMessage, RobotTransceiverAddress};
+use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
 use flume::Sender;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -109,13 +109,13 @@ impl<
         self.inner.queue_datagram(robot_id, datagram);
     }
 
-    pub fn recv(&self) -> RobotMessage<RR, DR> {
+    pub fn recv(&self) -> ConnectionDriverEvent<RR, DR> {
         self.inner.recv()
     }
-    pub fn try_recv(&self) -> Result<RobotMessage<RR, DR>, flume::TryRecvError> {
+    pub fn try_recv(&self) -> Result<ConnectionDriverEvent<RR, DR>, flume::TryRecvError> {
         self.inner.try_recv()
     }
-    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage<RR, DR>> {
+    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, ConnectionDriverEvent<RR, DR>> {
         self.inner.recv_async()
     }
 

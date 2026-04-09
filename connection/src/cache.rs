@@ -1,4 +1,4 @@
-use crate::{RobotMessage, RobotTransceiverAddress};
+use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
 use std::collections::HashMap;
 
 /// Cache that can keep track of the transient data that is sent with ConnectionDriver messages, like received responses and the connection type
@@ -14,9 +14,9 @@ struct RobotConnState<RR> {
 }
 
 impl<RR> ConnectionStateCache<RR> {
-    pub fn update<DR>(&mut self, msg: RobotMessage<RR, DR>) {
+    pub fn update<DR>(&mut self, msg: ConnectionDriverEvent<RR, DR>) {
         match msg {
-            RobotMessage::Connected(robot_id, addr) => {
+            ConnectionDriverEvent::Connected(robot_id, addr) => {
                 self.connected_robots.insert(
                     robot_id,
                     RobotConnState {
@@ -25,10 +25,10 @@ impl<RR> ConnectionStateCache<RR> {
                     },
                 );
             }
-            RobotMessage::Disconnected(robot_id, ..) => {
+            ConnectionDriverEvent::Disconnected(robot_id, ..) => {
                 self.connected_robots.remove(&robot_id);
             }
-            RobotMessage::PacketReceived(robot_id, packet, _) => {
+            ConnectionDriverEvent::PacketReceived(robot_id, packet, _) => {
                 if let Some(conn_state) = self.connected_robots.get_mut(&robot_id) {
                     conn_state.latest_response = Some(packet);
                 }

@@ -20,7 +20,7 @@ pub mod udp;
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Debug)]
-pub enum RobotMessage<RR, DR> {
+pub enum ConnectionDriverEvent<RR, DR> {
     Connected(u8, RobotTransceiverAddress),
     Disconnected(u8),
     PacketReceived(u8, RR, Instant),
@@ -28,7 +28,7 @@ pub enum RobotMessage<RR, DR> {
 }
 
 #[derive(Clone, Debug)]
-pub enum TransceiverMessage {
+pub enum TransceiverEvent {
     Connected(RobotTransceiverAddress, u8),
     Disconnected(RobotTransceiverAddress),
     PacketReceived(RobotTransceiverAddress, Box<[u8]>, Instant), // TODO: Replace with a statically sized array when feature(generic_const_exprs) lands

@@ -5,7 +5,7 @@ use crate::protocol::{PacketRxResult, RadioProtocol};
 use crate::serial::SerialTransceiver;
 #[cfg(feature = "udp")]
 use crate::udp::UdpTransceiver;
-use crate::{RobotIdFilter, RobotMessage, RobotTransceiverAddress, TransceiverMessage};
+use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress, TransceiverEvent};
 use flume::{Receiver, Sender, TrySendError};
 use log::{error, info};
 use std::io::ErrorKind;
@@ -46,7 +46,7 @@ pub struct ConnectionDriver<
     active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
 
     /// Merged message stream from all connections
-    out_channel: Receiver<RobotMessage<RR, DR>>,
+    out_channel: Receiver<ConnectionDriverEvent<RR, DR>>,
     _phantom_data: PhantomData<(RC, RR, DC, DR)>,
 }
 
@@ -133,13 +133,13 @@ impl<
         }
     }
 
-    pub fn recv(&self) -> RobotMessage<RR, DR> {
+    pub fn recv(&self) -> ConnectionDriverEvent<RR, DR> {
         self.out_channel.recv().unwrap()
     }
-    pub fn try_recv(&self) -> Result<RobotMessage<RR, DR>, flume::TryRecvError> {
+    pub fn try_recv(&self) -> Result<ConnectionDriverEvent<RR, DR>, flume::TryRecvError> {
         self.out_channel.try_recv()
     }
-    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, RobotMessage<RR, DR>> {
+    pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, ConnectionDriverEvent<RR, DR>> {
         self.out_channel.recv_async()
     }
 
@@ -167,7 +167,7 @@ impl<
         mut poll: mio::Poll,
         active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
         control_channel: Receiver<ConnectionDriverControlMessage>,
-        message_sender: Sender<RobotMessage<RR, DR>>,
+        message_sender: Sender<ConnectionDriverEvent<RR, DR>>,
     ) {
         let mut events = mio::Events::with_capacity(64);
 
@@ -259,36 +259,36 @@ impl<
             let mut update_transceiver_blacklists = false;
             for msg in transceiver_messages {
                 match msg {
-                    TransceiverMessage::Connected(addr, robot_id) => {
+                    TransceiverEvent::Connected(addr, robot_id) => {
                         let mut active_connections = active_connections.write().unwrap();
                         if !active_connections.contains_prim(&robot_id) {
                             active_connections.insert(robot_id, addr.clone(), P::default());
                             // Block on full channel because Connected messages can't be lost
                             message_sender
-                                .send(RobotMessage::Connected(robot_id, addr))
+                                .send(ConnectionDriverEvent::Connected(robot_id, addr))
                                 .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                         }
                         update_transceiver_blacklists = true;
                     }
-                    TransceiverMessage::Disconnected(addr) => {
+                    TransceiverEvent::Disconnected(addr) => {
                         if let Some((robot_id, _proto)) =
                             active_connections.write().unwrap().remove_sec(&addr)
                         {
                             // Block on full channel because Disconnected messages can't be lost
                             message_sender
-                                .send(RobotMessage::Disconnected(robot_id))
+                                .send(ConnectionDriverEvent::Disconnected(robot_id))
                                 .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                         }
                         update_transceiver_blacklists = true;
                     }
-                    TransceiverMessage::PacketReceived(addr, bytes, received_on) => {
+                    TransceiverEvent::PacketReceived(addr, bytes, received_on) => {
                         if let Some((&robot_id, proto)) =
                             active_connections.write().unwrap().get_sec_mut(&addr)
                         {
                             match proto.packet_received(&bytes, received_on) {
                                 // Don't block if the channel is full because some package loss is acceptable for regular packets
                                 PacketRxResult::Regular(packet) => match message_sender
-                                    .try_send(RobotMessage::PacketReceived(
+                                    .try_send(ConnectionDriverEvent::PacketReceived(
                                         robot_id,
                                         packet,
                                         received_on,
@@ -299,7 +299,7 @@ impl<
                                     },
                                 // Block on full channel because Datagram messages can't be lost
                                 PacketRxResult::Datagram(dgram) => message_sender
-                                    .send(RobotMessage::DatagramReceived(
+                                    .send(ConnectionDriverEvent::DatagramReceived(
                                         robot_id,
                                         dgram,
                                         received_on,
