@@ -51,6 +51,17 @@ impl<const N: usize> PacketUnpacking<N> for [u8; N] {
     }
 }
 
+impl<const N: usize> PacketUnpacking<N> for Box<[u8; N]> {
+    fn unpack(slice: &[u8]) -> Result<Self, DekuError> {
+        if slice.len() < N {
+            return Err(DekuError::Incomplete(NeedSize::new(N * 8)));
+        }
+        let mut out = Box::new([0u8; N]);
+        out.copy_from_slice(&slice[..N]);
+        Ok(out)
+    }
+}
+
 /// Marker trait providing a PacketPacking and PacketUnpacking implementations for deku structs
 pub trait DekuPackedSize<const SIZE: usize>:
     DekuContainerWrite + for<'a> DekuContainerRead<'a>

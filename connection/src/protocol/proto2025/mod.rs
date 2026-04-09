@@ -9,6 +9,13 @@ use std::time::Instant;
 pub mod datagrams;
 pub mod packet;
 
+/// Marker trait for all valid proto2025 input/output types. Used as a more accurate restriction on top of the packed size.
+trait RadioProtocol2025Payload {}
+impl RadioProtocol2025Payload for RegularCommandPayload {}
+impl RadioProtocol2025Payload for RegularResponsePayload {}
+impl RadioProtocol2025Payload for [u8; PAYLOAD_SIZE] {}
+impl RadioProtocol2025Payload for Box<[u8; PAYLOAD_SIZE]> {}
+
 pub struct RadioProtocol2025 {
     // General
     counter: u8,
@@ -79,8 +86,10 @@ impl Default for RadioProtocol2025 {
     }
 }
 
-impl<RC: PacketPacking<PAYLOAD_SIZE>, RR: PacketUnpacking<PAYLOAD_SIZE>>
-    RadioProtocol<RC, RR, CommandDatagram, ResponseDatagram> for RadioProtocol2025
+impl<
+    RC: PacketPacking<PAYLOAD_SIZE> + RadioProtocol2025Payload,
+    RR: PacketUnpacking<PAYLOAD_SIZE> + RadioProtocol2025Payload,
+> RadioProtocol<RC, RR, CommandDatagram, ResponseDatagram> for RadioProtocol2025
 {
     const RESPONSE_PACKET_SIZE: usize = PAYLOAD_SIZE + 1; // +1 for header
 
