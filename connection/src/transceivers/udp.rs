@@ -1,5 +1,6 @@
 use crate::driver::TokenAllocator;
-use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverEvent};
+use crate::transceivers::TransceiverEvent;
+use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
 use log::{error, trace, warn};
 use mio::Interest;
 use mio::net::UdpSocket;
@@ -157,10 +158,6 @@ impl UdpTransceiver {
             timeout: DEFAULT_TIMEOUT,
             id_filter: RobotIdFilter::default(),
         })
-    }
-
-    pub fn connected_robots(&self) -> Vec<SocketAddr> {
-        self.connection_timeouts.keys().copied().collect()
     }
 
     pub fn next_timeout(&self) -> Instant {

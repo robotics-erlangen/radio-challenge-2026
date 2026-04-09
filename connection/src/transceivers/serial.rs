@@ -1,6 +1,7 @@
 use crate::driver::TokenAllocator;
 use crate::dual_map::DualHashMap;
-use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress, TransceiverEvent};
+use crate::transceivers::TransceiverEvent;
+use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
 use log::{error, trace, warn};
 use mio::Interest;
 pub use mio_serial::SerialPortInfo;
