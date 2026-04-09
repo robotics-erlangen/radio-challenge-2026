@@ -1,9 +1,10 @@
 use crate::driver::TokenAllocator;
 use crate::dual_map::DualHashMap;
-use crate::transceivers::TransceiverEvent;
+use crate::transceivers::{Transceiver, TransceiverEvent};
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
 use log::{error, trace, warn};
-use mio::Interest;
+use mio::event::Event;
+use mio::{Interest, Poll};
 pub use mio_serial::SerialPortInfo;
 use mio_serial::{SerialPortType, SerialStream};
 use std::io;
@@ -22,38 +23,30 @@ pub struct SerialTransceiver {
     next_discovery_time: Instant,
     next_conn_timeout: Option<Instant>, //TODO: Somehow enforce updating this cache with active_connections.values().map(|s| s.timeout).min()
 
-    // Config
+    // Config. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
     pub probe_period: Duration,
     pub id_filter: RobotIdFilter,
     pub timeout: Duration,
     packet_size: usize,
 }
 
-impl SerialTransceiver {
-    pub fn start(
-        _poll: &mut mio::Poll,
-        _token_allocator: &mut TokenAllocator,
-        packet_size: usize,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            active_connections: DualHashMap::new(),
-            active_discovery_ports: None,
-            next_discovery_time: Instant::now(),
-            next_conn_timeout: None,
-            probe_period: DEFAULT_PROBE_PERIOD,
-            id_filter: RobotIdFilter::default(),
-            timeout: DEFAULT_TIMEOUT,
-            packet_size,
-        })
+impl Transceiver for SerialTransceiver {
+    fn set_id_filter(&mut self, id_filter: RobotIdFilter) {
+        self.id_filter = id_filter;
     }
 
-    pub fn next_timeout(&self) -> Instant {
+    fn next_timeout(&self) -> Instant {
         self.next_conn_timeout
             .map(|d| d.min(self.next_discovery_time))
             .unwrap_or(self.next_discovery_time)
     }
 
-    pub fn send_packet(&mut self, port_name: &str, packet: &[u8]) {
+    fn send_packet(&mut self, addr: &RobotTransceiverAddress, packet: &[u8]) {
+        let RobotTransceiverAddress::Serial(port_info) = addr else {
+            return;
+        };
+        let port_name = &port_info.port_name;
+
         // Check if the connection is active
         if let Some((_token, state)) = self.active_connections.get_sec_mut(port_name) {
             // Encode the packet
@@ -73,19 +66,17 @@ impl SerialTransceiver {
         };
     }
 
-    // ======== Timeout handler ========
-
-    pub fn mio_timeout(
+    fn mio_timeout(
         &mut self,
         now: Instant,
-        mut msg_callback: impl FnMut(TransceiverEvent),
-        poll: &mut mio::Poll,
+        poll: &mut Poll,
         token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
     ) {
         // Handle discovery
         if self.next_discovery_time < now {
             if let Some(ports) = self.active_discovery_ports.take() {
-                self.end_discovery(poll, ports, &mut msg_callback);
+                self.end_discovery(poll, ports, events_out);
                 self.next_discovery_time +=
                     self.probe_period.saturating_sub(Duration::from_millis(500));
             } else {
@@ -98,7 +89,7 @@ impl SerialTransceiver {
         if self.next_conn_timeout.is_some_and(|t| t < now) {
             self.active_connections.retain(|_, _, state| {
                 if state.timeout < now {
-                    msg_callback(TransceiverEvent::Disconnected(
+                    events_out.push(TransceiverEvent::Disconnected(
                         state.port_info.clone().into(),
                     ));
                     false
@@ -110,9 +101,46 @@ impl SerialTransceiver {
         }
     }
 
+    fn mio_event(
+        &mut self,
+        event: Event,
+        _poll: &mut Poll,
+        _token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
+    ) {
+        // Filter out discovery tokens, they will be handled separately
+        if let Some((_port_name, conn)) = self.active_connections.get_prim_mut(&event.token()) {
+            conn.receive_serial_packets(self.timeout, events_out);
+            if self.next_conn_timeout.is_some_and(|old| conn.timeout < old) {
+                self.next_conn_timeout = Some(conn.timeout);
+            }
+        }
+    }
+}
+
+impl SerialTransceiver {
+    pub fn start(
+        _poll: &mut Poll,
+        _token_allocator: &mut TokenAllocator,
+        packet_size: usize,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            active_connections: DualHashMap::new(),
+            active_discovery_ports: None,
+            next_discovery_time: Instant::now(),
+            next_conn_timeout: None,
+            probe_period: DEFAULT_PROBE_PERIOD,
+            id_filter: RobotIdFilter::default(),
+            timeout: DEFAULT_TIMEOUT,
+            packet_size,
+        })
+    }
+
+    // ======== Timeout handling ========
+
     fn start_discovery(
         &self,
-        poll: &mio::Poll,
+        poll: &Poll,
         token_allocator: &mut TokenAllocator,
     ) -> Vec<(mio::Token, SerialPortInfo, SerialStream)> {
         let new_ports = mio_serial::available_ports()
@@ -165,9 +193,9 @@ impl SerialTransceiver {
 
     fn end_discovery(
         &mut self,
-        poll: &mio::Poll,
+        poll: &Poll,
         discovery_ports: Vec<(mio::Token, SerialPortInfo, SerialStream)>,
-        msg_callback: &mut impl FnMut(TransceiverEvent),
+        events_out: &mut Vec<TransceiverEvent>,
     ) {
         'ports: for (token, port_info, mut port) in discovery_ports {
             // Read response
@@ -218,28 +246,12 @@ impl SerialTransceiver {
                 );
                 self.active_connections
                     .insert(token, port_info.port_name.clone(), state);
-                msg_callback(TransceiverEvent::Connected(
+                events_out.push(TransceiverEvent::Connected(
                     RobotTransceiverAddress::Serial(port_info),
                     robot_id,
                 ));
             } else {
                 poll.registry().deregister(&mut port).unwrap();
-            }
-        }
-    }
-
-    // ======== Readable event handler ========
-
-    pub fn mio_event(
-        &mut self,
-        event: mio::event::Event,
-        msg_callback: impl FnMut(TransceiverEvent),
-    ) {
-        // Filter out discovery tokens, they will be handled separately
-        if let Some((_port_name, conn)) = self.active_connections.get_prim_mut(&event.token()) {
-            conn.receive_serial_packets(self.timeout, msg_callback);
-            if self.next_conn_timeout.is_some_and(|old| conn.timeout < old) {
-                self.next_conn_timeout = Some(conn.timeout);
             }
         }
     }
@@ -259,7 +271,7 @@ impl SerialConnectionState {
     fn receive_serial_packets(
         &mut self,
         configured_timeout: Duration,
-        mut msg_callback: impl FnMut(TransceiverEvent),
+        events_out: &mut Vec<TransceiverEvent>,
     ) {
         loop {
             match self.port.read(&mut self.rx_buf[self.rx_buf_pos..]) {
@@ -300,11 +312,11 @@ impl SerialConnectionState {
                     }
 
                     self.timeout = Instant::now() + configured_timeout;
-                    msg_callback(TransceiverEvent::PacketReceived(
+                    events_out.push(TransceiverEvent::PacketReceived(
                         RobotTransceiverAddress::Serial(self.port_info.clone()),
                         (&decoded[..decoded.len() - 1]).into(),
                         Instant::now(),
-                    ))
+                    ));
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => return,
                 Err(e) => {

@@ -1,9 +1,10 @@
 use crate::driver::TokenAllocator;
-use crate::transceivers::TransceiverEvent;
+use crate::transceivers::{Transceiver, TransceiverEvent};
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
 use log::{error, trace, warn};
-use mio::Interest;
+use mio::event::Event;
 use mio::net::UdpSocket;
+use mio::{Interest, Poll};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
@@ -88,7 +89,7 @@ pub struct UdpTransceiver {
     next_beacon_time: Instant,
     next_conn_timeout: Option<Instant>,
 
-    // Configuration
+    // Config. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
     pub timeout: Duration,
     pub id_filter: RobotIdFilter,
 }
@@ -99,9 +100,95 @@ struct RegisteredSocket {
     token: mio::Token,
 }
 
+impl Transceiver for UdpTransceiver {
+    fn set_id_filter(&mut self, id_filter: RobotIdFilter) {
+        self.id_filter = id_filter;
+    }
+
+    fn next_timeout(&self) -> Instant {
+        self.next_conn_timeout
+            .map_or(self.next_beacon_time, |t| t.min(self.next_beacon_time))
+    }
+
+    fn send_packet(&mut self, addr: &RobotTransceiverAddress, packet: &[u8]) {
+        let RobotTransceiverAddress::Udp(addr) = addr else {
+            return;
+        };
+
+        // Check if the socket address is known
+        if !self.connection_timeouts.contains_key(addr) {
+            return;
+        }
+
+        let result = if addr.is_ipv4() {
+            self.data_socket_v4.socket.send_to(packet, *addr)
+        } else {
+            self.data_socket_v6.socket.send_to(packet, *addr)
+        };
+
+        if let Err(e) = result {
+            warn!("Failed to send udp data packet to {addr}: {e}");
+        } else {
+            trace!("Sent udp data packet to {addr}");
+        }
+    }
+
+    fn mio_timeout(
+        &mut self,
+        now: Instant,
+        _poll: &mut Poll,
+        _token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
+    ) {
+        // Check if any connection has timed out
+        if self.next_conn_timeout.is_some_and(|t| t < now) {
+            self.connection_timeouts.retain(|&addr, t| {
+                if *t < now {
+                    events_out.push(TransceiverEvent::Disconnected(addr.into()));
+                    false
+                } else {
+                    true
+                }
+            });
+            self.next_conn_timeout = self.connection_timeouts.values().min().copied();
+        }
+
+        // Send beacon packets
+        if now >= self.next_beacon_time {
+            self.send_beacon_packets();
+            self.next_beacon_time += Duration::from_secs(1);
+        }
+    }
+
+    fn mio_event(
+        &mut self,
+        event: Event,
+        _poll: &mut Poll,
+        _token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
+    ) {
+        let token = event.token();
+
+        if token == self.discovery_socket_v4.token {
+            self.receive_discovery_packets(false, events_out);
+        } else if token == self.discovery_socket_v6.token {
+            self.receive_discovery_packets(true, events_out);
+        } else if token == self.data_socket_v4.token {
+            self.receive_data_packets(false, events_out);
+        } else if token == self.data_socket_v6.token {
+            self.receive_data_packets(true, events_out);
+        } else {
+            // Ignore unknown tokens, they might be for other transceivers
+            return;
+        }
+
+        self.next_conn_timeout = self.connection_timeouts.values().min().copied();
+    }
+}
+
 impl UdpTransceiver {
     pub fn start(
-        poll: &mut mio::Poll,
+        poll: &mut Poll,
         token_allocator: &mut TokenAllocator,
         packet_size: usize,
     ) -> io::Result<Self> {
@@ -160,52 +247,7 @@ impl UdpTransceiver {
         })
     }
 
-    pub fn next_timeout(&self) -> Instant {
-        self.next_conn_timeout
-            .map_or(self.next_beacon_time, |t| t.min(self.next_beacon_time))
-    }
-
-    pub fn send_packet(&mut self, addr: SocketAddr, bytes: &[u8]) {
-        // Check if the socket address is known
-        if !self.connection_timeouts.contains_key(&addr) {
-            return;
-        }
-
-        let result = if addr.is_ipv4() {
-            self.data_socket_v4.socket.send_to(bytes, addr)
-        } else {
-            self.data_socket_v6.socket.send_to(bytes, addr)
-        };
-
-        if let Err(e) = result {
-            warn!("Failed to send udp data packet to {addr}: {e}");
-        } else {
-            trace!("Sent udp data packet to {addr}");
-        }
-    }
-
-    // ======== Timeout handler ========
-
-    pub fn mio_timeout(&mut self, now: Instant, mut msg_callback: impl FnMut(TransceiverEvent)) {
-        // Check if any connection has timed out
-        if self.next_conn_timeout.is_some_and(|t| t < now) {
-            self.connection_timeouts.retain(|&addr, t| {
-                if *t < now {
-                    msg_callback(TransceiverEvent::Disconnected(addr.into()));
-                    false
-                } else {
-                    true
-                }
-            });
-            self.next_conn_timeout = self.connection_timeouts.values().min().copied();
-        }
-
-        // Send beacon packets
-        if now >= self.next_beacon_time {
-            self.send_beacon_packets();
-            self.next_beacon_time += Duration::from_secs(1);
-        }
-    }
+    // ======== Timeout handling ========
 
     fn send_beacon_packets(&self) {
         let interfaces = NetworkInterface::show().expect("Failed to list network interfaces");
@@ -250,36 +292,9 @@ impl UdpTransceiver {
         }
     }
 
-    // ======== Readable event handler ========
+    // ======== Readable event handling ========
 
-    pub fn mio_event(
-        &mut self,
-        event: mio::event::Event,
-        msg_callback: impl FnMut(TransceiverEvent),
-    ) {
-        let token = event.token();
-
-        if token == self.discovery_socket_v4.token {
-            self.receive_discovery_packets(false, msg_callback);
-        } else if token == self.discovery_socket_v6.token {
-            self.receive_discovery_packets(true, msg_callback);
-        } else if token == self.data_socket_v4.token {
-            self.receive_data_packets(false, msg_callback);
-        } else if token == self.data_socket_v6.token {
-            self.receive_data_packets(true, msg_callback);
-        } else {
-            // Ignore unknown tokens, they might be for other transceivers
-            return;
-        }
-
-        self.next_conn_timeout = self.connection_timeouts.values().min().copied();
-    }
-
-    fn receive_discovery_packets(
-        &mut self,
-        v6: bool,
-        mut msg_callback: impl FnMut(TransceiverEvent),
-    ) {
+    fn receive_discovery_packets(&mut self, v6: bool, events_out: &mut Vec<TransceiverEvent>) {
         let mut rx_buf = [0u8; 1];
         let socket = if v6 {
             &self.discovery_socket_v6.socket
@@ -311,7 +326,7 @@ impl UdpTransceiver {
                     // Insert into the connection map
                     if let Entry::Vacant(e) = self.connection_timeouts.entry(data_addr) {
                         e.insert(Instant::now() + self.timeout);
-                        msg_callback(TransceiverEvent::Connected(
+                        events_out.push(TransceiverEvent::Connected(
                             RobotTransceiverAddress::Udp(data_addr),
                             robot_id,
                         ));
@@ -323,7 +338,7 @@ impl UdpTransceiver {
         }
     }
 
-    fn receive_data_packets(&mut self, v6: bool, mut msg_callback: impl FnMut(TransceiverEvent)) {
+    fn receive_data_packets(&mut self, v6: bool, events_out: &mut Vec<TransceiverEvent>) {
         let socket = if v6 {
             &self.data_socket_v6.socket
         } else {
@@ -340,7 +355,7 @@ impl UdpTransceiver {
 
                     *connection_timeout = Instant::now() + self.timeout;
                     trace!("Received udp packet from {src_addr}");
-                    msg_callback(TransceiverEvent::PacketReceived(
+                    events_out.push(TransceiverEvent::PacketReceived(
                         RobotTransceiverAddress::Udp(src_addr),
                         self.rx_buf.clone(),
                         Instant::now(),

@@ -1,11 +1,7 @@
 use crate::conn_stats::ConnectionStats;
 use crate::dual_map::DualHashMap;
 use crate::protocol::{PacketRxResult, RadioProtocol};
-use crate::transceivers::TransceiverEvent;
-#[cfg(feature = "serial")]
-use crate::transceivers::serial::SerialTransceiver;
-#[cfg(feature = "udp")]
-use crate::transceivers::udp::UdpTransceiver;
+use crate::transceivers::{TransceiverEvent, TransceiverGroup};
 use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress};
 use flume::{Receiver, Sender, TrySendError};
 use log::{error, info};
@@ -173,25 +169,12 @@ impl<
         let mut events = mio::Events::with_capacity(64);
 
         let mut token_allocator = TokenAllocator(WAKER_TOKEN.0 + 1); // The waker is usually 0
-        #[cfg(feature = "serial")]
-        let mut serial_transceiver =
-            SerialTransceiver::start(&mut poll, &mut token_allocator, P::RESPONSE_PACKET_SIZE)
-                .expect("Failed to start serial transceiver");
-        #[cfg(feature = "udp")]
-        let mut udp_transceiver =
-            UdpTransceiver::start(&mut poll, &mut token_allocator, P::RESPONSE_PACKET_SIZE)
-                .expect("Failed to start UDP transceiver");
+        let mut transceivers =
+            TransceiverGroup::init_all(&mut poll, &mut token_allocator, P::RESPONSE_PACKET_SIZE);
 
         loop {
             // Get the closest transceiver timeout
-            let transceiver_timeouts = vec![
-                #[cfg(feature = "serial")]
-                serial_transceiver.next_timeout(),
-                #[cfg(feature = "udp")]
-                udp_transceiver.next_timeout(),
-            ];
-            let next_timeout = transceiver_timeouts.into_iter().min();
-
+            let next_timeout = transceivers.iter().map(|t| t.next_timeout()).min();
             // Convert timeout instant to duration from now
             let timeout_dur = next_timeout.map(|i| i.saturating_duration_since(Instant::now()));
 
@@ -212,15 +195,16 @@ impl<
             // Handle timeouts
             let now = Instant::now();
             if next_timeout.is_some_and(|t| t <= now) {
-                #[cfg(feature = "serial")]
-                serial_transceiver.mio_timeout(
-                    now,
-                    |msg| transceiver_messages.push(msg),
-                    &mut poll,
-                    &mut token_allocator,
-                );
-                #[cfg(feature = "udp")]
-                udp_transceiver.mio_timeout(now, |msg| transceiver_messages.push(msg));
+                // Call timeout on every transceiver because there might be multiple timeouts at once,
+                // and more timeouts could have elapsed after the mio event was received
+                for t in transceivers.iter_mut() {
+                    t.mio_timeout(
+                        now,
+                        &mut poll,
+                        &mut token_allocator,
+                        &mut transceiver_messages,
+                    );
+                }
             }
 
             // Handle mio events and control messages
@@ -230,28 +214,27 @@ impl<
                         // Process any incoming control messages
                         while let Ok(msg) = control_channel.try_recv() {
                             match msg {
-                                ConnectionDriverControlMessage::Send(addr, bytes) => match addr {
-                                    #[cfg(feature = "serial")]
-                                    RobotTransceiverAddress::Serial(port_info) => {
-                                        serial_transceiver.send_packet(&port_info.port_name, &bytes)
+                                // Call send on each transceiver, they ignore other addresses
+                                ConnectionDriverControlMessage::Send(addr, bytes) => {
+                                    for t in transceivers.iter_mut() {
+                                        t.send_packet(&addr, &bytes);
                                     }
-                                    #[cfg(feature = "udp")]
-                                    RobotTransceiverAddress::Udp(addr) => {
-                                        udp_transceiver.send_packet(addr, &bytes)
-                                    }
-                                },
+                                }
                                 ConnectionDriverControlMessage::Stop => return,
                             }
                         }
                     }
                     _ => {
-                        // Call handlers on every transceiver
-                        #[cfg(feature = "serial")]
-                        serial_transceiver
-                            .mio_event(event.clone(), |msg| transceiver_messages.push(msg));
-                        #[cfg(feature = "udp")]
-                        udp_transceiver
-                            .mio_event(event.clone(), |msg| transceiver_messages.push(msg));
+                        // Call handlers on every transceiver. Tracking which transceiver the token is from
+                        // would be too much work, so they just ignore unknown tokens.
+                        for t in transceivers.iter_mut() {
+                            t.mio_event(
+                                event.clone(),
+                                &mut poll,
+                                &mut token_allocator,
+                                &mut transceiver_messages,
+                            );
+                        }
                     }
                 }
             }
@@ -313,6 +296,7 @@ impl<
                 }
             }
 
+            // Set transceiver blacklists so the other transceivers ignore already connected ids
             if update_transceiver_blacklists {
                 let filter = RobotIdFilter::new().with_blacklist(
                     active_connections
@@ -321,13 +305,8 @@ impl<
                         .keys()
                         .map(|(id, _addr)| *id),
                 );
-                #[cfg(feature = "serial")]
-                {
-                    serial_transceiver.id_filter = filter.clone();
-                }
-                #[cfg(feature = "udp")]
-                {
-                    udp_transceiver.id_filter = filter.clone();
+                for t in transceivers.iter_mut() {
+                    t.set_id_filter(filter.clone());
                 }
             }
         }

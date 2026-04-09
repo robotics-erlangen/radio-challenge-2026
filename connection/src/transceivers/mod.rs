@@ -1,3 +1,6 @@
+use crate::RobotIdFilter;
+use crate::driver::TokenAllocator;
+use log::error;
 #[cfg(feature = "serial")]
 use mio_serial::SerialPortInfo;
 use std::fmt::{Display, Formatter};
@@ -10,6 +13,82 @@ use std::time::Instant;
 pub mod serial;
 #[cfg(feature = "udp")]
 pub mod udp;
+
+pub trait Transceiver {
+    fn set_id_filter(&mut self, id_filter: RobotIdFilter);
+
+    fn next_timeout(&self) -> Instant;
+
+    fn send_packet(&mut self, addr: &RobotTransceiverAddress, packet: &[u8]);
+
+    fn mio_timeout(
+        &mut self,
+        now: Instant,
+        poll: &mut mio::Poll,
+        token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
+    );
+
+    fn mio_event(
+        &mut self,
+        event: mio::event::Event,
+        poll: &mut mio::Poll,
+        token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
+    );
+}
+
+pub struct TransceiverGroup {
+    #[cfg(feature = "serial")]
+    pub serial: Option<serial::SerialTransceiver>,
+    #[cfg(feature = "udp")]
+    pub udp: Option<udp::UdpTransceiver>,
+}
+
+impl TransceiverGroup {
+    pub fn init_all(
+        poll: &mut mio::Poll,
+        token_allocator: &mut TokenAllocator,
+        packet_size: usize,
+    ) -> Self {
+        Self {
+            #[cfg(feature = "serial")]
+            serial: serial::SerialTransceiver::start(poll, token_allocator, packet_size)
+                .inspect_err(|e| error!("Failed to initialize serial transceiver: {e}"))
+                .ok(),
+            #[cfg(feature = "udp")]
+            udp: udp::UdpTransceiver::start(poll, token_allocator, packet_size)
+                .inspect_err(|e| error!("Failed to initialize udp transceiver: {e}"))
+                .ok(),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &dyn Transceiver> {
+        let mut transceivers: Vec<&'_ dyn Transceiver> = Vec::new();
+        #[cfg(feature = "serial")]
+        if let Some(serial) = &self.serial {
+            transceivers.push(serial);
+        }
+        #[cfg(feature = "udp")]
+        if let Some(udp) = &self.udp {
+            transceivers.push(udp);
+        }
+        transceivers.into_iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut dyn Transceiver> {
+        let mut transceivers: Vec<&'_ mut dyn Transceiver> = Vec::new();
+        #[cfg(feature = "serial")]
+        if let Some(serial) = &mut self.serial {
+            transceivers.push(serial);
+        }
+        #[cfg(feature = "udp")]
+        if let Some(udp) = &mut self.udp {
+            transceivers.push(udp);
+        }
+        transceivers.into_iter()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum TransceiverEvent {
