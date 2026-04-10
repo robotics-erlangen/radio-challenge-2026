@@ -3,7 +3,7 @@ use crate::driver::TokenAllocator;
 use log::error;
 #[cfg(feature = "serial")]
 use mio_serial::SerialPortInfo;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 #[cfg(feature = "udp")]
 use std::net::SocketAddr;
@@ -14,13 +14,21 @@ pub mod serial;
 #[cfg(feature = "udp")]
 pub mod udp;
 
+// ======== Transceiver trait ========
+
 pub trait Transceiver {
     fn set_id_filter(&mut self, id_filter: RobotIdFilter);
 
     fn next_timeout(&self) -> Instant;
 
-    fn send_packet(&mut self, addr: &RobotTransceiverAddress, packet: &[u8]);
+    // Single packet send -> single io operation -> returned error is enough
+    fn send_packet(
+        &mut self,
+        addr: &RobotTransceiverAddress,
+        packet: &[u8],
+    ) -> Result<(), TransceiverError>;
 
+    // Could trigger multiple io operations -> return errors as part of the event stream
     fn mio_timeout(
         &mut self,
         now: Instant,
@@ -29,6 +37,7 @@ pub trait Transceiver {
         events_out: &mut Vec<TransceiverEvent>,
     );
 
+    // Could trigger multiple io operations -> return errors as part of the event stream
     fn mio_event(
         &mut self,
         event: mio::event::Event,
@@ -53,7 +62,7 @@ impl TransceiverGroup {
     ) -> Self {
         Self {
             #[cfg(feature = "serial")]
-            serial: serial::SerialTransceiver::start(poll, token_allocator, packet_size)
+            serial: serial::SerialTransceiver::start(packet_size)
                 .inspect_err(|e| error!("Failed to initialize serial transceiver: {e}"))
                 .ok(),
             #[cfg(feature = "udp")]
@@ -90,12 +99,7 @@ impl TransceiverGroup {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum TransceiverEvent {
-    Connected(RobotTransceiverAddress, u8),
-    Disconnected(RobotTransceiverAddress),
-    PacketReceived(RobotTransceiverAddress, Box<[u8]>, Instant), // TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
-}
+// ======== Transceiver api types ========
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RobotTransceiverAddress {
@@ -138,5 +142,59 @@ impl From<SerialPortInfo> for RobotTransceiverAddress {
 impl From<SocketAddr> for RobotTransceiverAddress {
     fn from(value: SocketAddr) -> Self {
         Self::Udp(value)
+    }
+}
+
+#[derive(Debug)]
+pub enum TransceiverEvent {
+    Connected(RobotTransceiverAddress, u8),
+    Disconnected(RobotTransceiverAddress),
+    PacketReceived(RobotTransceiverAddress, Box<[u8]>, Instant), // TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
+    Error(TransceiverError),
+}
+
+impl From<TransceiverError> for TransceiverEvent {
+    fn from(value: TransceiverError) -> Self {
+        Self::Error(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct TransceiverError {
+    pub msg: String,
+    pub source: Option<std::io::Error>,
+}
+
+impl Display for TransceiverError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(source) = self.source.as_ref() {
+            write!(f, "{}: {source}", self.msg)
+        } else {
+            f.write_str(&self.msg)
+        }
+    }
+}
+
+impl std::error::Error for TransceiverError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|e| e as &(dyn std::error::Error + 'static))
+    }
+}
+
+trait IoToTransceiverError: Sized {
+    fn to_error(self, msg: impl Into<String>) -> TransceiverError;
+    fn to_event(self, msg: impl Into<String>) -> TransceiverEvent {
+        TransceiverEvent::Error(self.to_error(msg))
+    }
+}
+
+impl IoToTransceiverError for std::io::Error {
+    fn to_error(self, msg: impl Into<String>) -> TransceiverError {
+        TransceiverError {
+            msg: msg.into(),
+            source: Some(self),
+        }
     }
 }

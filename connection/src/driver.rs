@@ -190,7 +190,7 @@ impl<
             }
 
             // Temporary storage for any emitted transceiver messages
-            let mut transceiver_messages = Vec::new();
+            let mut transceiver_events = Vec::new();
 
             // Handle timeouts
             let now = Instant::now();
@@ -202,7 +202,7 @@ impl<
                         now,
                         &mut poll,
                         &mut token_allocator,
-                        &mut transceiver_messages,
+                        &mut transceiver_events,
                     );
                 }
             }
@@ -217,7 +217,9 @@ impl<
                                 // Call send on each transceiver, they ignore other addresses
                                 ConnectionDriverControlMessage::Send(addr, bytes) => {
                                     for t in transceivers.iter_mut() {
-                                        t.send_packet(&addr, &bytes);
+                                        if let Err(e) = t.send_packet(&addr, &bytes) {
+                                            transceiver_events.push(TransceiverEvent::Error(e));
+                                        }
                                     }
                                 }
                                 ConnectionDriverControlMessage::Stop => return,
@@ -232,7 +234,7 @@ impl<
                                 event.clone(),
                                 &mut poll,
                                 &mut token_allocator,
-                                &mut transceiver_messages,
+                                &mut transceiver_events,
                             );
                         }
                     }
@@ -241,7 +243,7 @@ impl<
 
             // Process collected transceiver messages
             let mut update_transceiver_blacklists = false;
-            for msg in transceiver_messages {
+            for msg in transceiver_events {
                 match msg {
                     TransceiverEvent::Connected(addr, robot_id) => {
                         let mut active_connections = active_connections.write().unwrap();
@@ -292,6 +294,9 @@ impl<
                                 PacketRxResult::IncompleteDatagram => {}
                             }
                         };
+                    }
+                    TransceiverEvent::Error(err) => {
+                        error!("Transceiver error: {err}");
                     }
                 }
             }

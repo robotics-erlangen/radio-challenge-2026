@@ -1,8 +1,8 @@
 use crate::driver::TokenAllocator;
 use crate::dual_map::DualHashMap;
-use crate::transceivers::{Transceiver, TransceiverEvent};
+use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
-use log::{error, trace, warn};
+use log::trace;
 use mio::event::Event;
 use mio::{Interest, Poll};
 pub use mio_serial::SerialPortInfo;
@@ -41,29 +41,40 @@ impl Transceiver for SerialTransceiver {
             .unwrap_or(self.next_discovery_time)
     }
 
-    fn send_packet(&mut self, addr: &RobotTransceiverAddress, packet: &[u8]) {
+    fn send_packet(
+        &mut self,
+        addr: &RobotTransceiverAddress,
+        packet: &[u8],
+    ) -> Result<(), TransceiverError> {
         let RobotTransceiverAddress::Serial(port_info) = addr else {
-            return;
+            return Ok(()); // Skipping other addresses is expected
         };
         let port_name = &port_info.port_name;
 
         // Check if the connection is active
         if let Some((_token, state)) = self.active_connections.get_sec_mut(port_name) {
-            // Encode the packet
+            // Calculate checksum
             let checksum = packet.iter().fold(0u8, |sum, &x| sum ^ x);
             let mut packet_bytes = packet.to_vec();
             packet_bytes.push(checksum);
 
+            // Encode the packet
             let mut encoded_bytes = cobs::encode_vec(&packet_bytes);
             encoded_bytes.push(0);
 
             // Write the encoded packet
-            if let Err(e) = state.port.write_all(&encoded_bytes) {
-                warn!("Failed to send serial packet to {port_name}: {e}");
-            } else {
-                trace!("Sent serial packet to {port_name}");
+            match state.port.write_all(&encoded_bytes) {
+                Ok(_) => trace!("Sent serial data packet to {port_name}"),
+                Err(e) => {
+                    return Err(e.to_error(format!(
+                        "Failed to send serial data packet to {}",
+                        port_info.port_name
+                    )));
+                }
             }
-        };
+        }
+
+        Ok(())
     }
 
     fn mio_timeout(
@@ -80,7 +91,8 @@ impl Transceiver for SerialTransceiver {
                 self.next_discovery_time +=
                     self.probe_period.saturating_sub(Duration::from_millis(500));
             } else {
-                self.active_discovery_ports = Some(self.start_discovery(poll, token_allocator));
+                self.active_discovery_ports =
+                    Some(self.start_discovery(poll, token_allocator, events_out));
                 self.next_discovery_time += Duration::from_millis(500);
             }
         }
@@ -119,11 +131,7 @@ impl Transceiver for SerialTransceiver {
 }
 
 impl SerialTransceiver {
-    pub fn start(
-        _poll: &mut Poll,
-        _token_allocator: &mut TokenAllocator,
-        packet_size: usize,
-    ) -> io::Result<Self> {
+    pub fn start(packet_size: usize) -> io::Result<Self> {
         Ok(Self {
             active_connections: DualHashMap::new(),
             active_discovery_ports: None,
@@ -142,9 +150,10 @@ impl SerialTransceiver {
         &self,
         poll: &Poll,
         token_allocator: &mut TokenAllocator,
+        events_out: &mut Vec<TransceiverEvent>,
     ) -> Vec<(mio::Token, SerialPortInfo, SerialStream)> {
         let new_ports = mio_serial::available_ports()
-            .expect("Failed to list serial ports")
+            .expect("Failed to list serial ports") // TODO: Gracefully handle serial port list errors
             .into_iter()
             // Filter by port info
             .filter(|p| match p.port_type.clone() {
@@ -156,13 +165,19 @@ impl SerialTransceiver {
                 _ => false,
             })
             // Filter for new ports
-            .filter(|p| !self.active_connections.contains_sec(&p.port_name))
+            .filter(|port_info| !self.active_connections.contains_sec(&port_info.port_name))
             // Open the ports
-            .filter_map(|p| {
-                SerialStream::open(&mio_serial::new(&p.port_name, BAUD_RATE))
-                    .inspect_err(|e| warn!("Failed to open serial port {}: {}", p.port_name, e))
-                    .ok()
-                    .map(|a| (p, a))
+            .filter_map(|port_info| {
+                match SerialStream::open(&mio_serial::new(&port_info.port_name, BAUD_RATE)) {
+                    Ok(s) => Some((port_info, s)),
+                    Err(e) => {
+                        events_out.push(io::Error::from(e).to_event(format!(
+                            "Failed to open serial port {}",
+                            port_info.port_name
+                        )));
+                        None
+                    }
+                }
             })
             .collect::<Vec<_>>();
 
@@ -170,22 +185,25 @@ impl SerialTransceiver {
         for (port_info, mut port) in new_ports {
             // Send init message
             if let Err(e) = port.write_all("start-connection\r".as_bytes()) {
-                warn!(
-                    "Failed to send start-connection command to {}: {e}",
+                events_out.push(e.to_event(format!(
+                    "Failed to send start-connection command to {}",
                     port_info.port_name
-                );
+                )));
                 continue;
             }
             trace!("Sent start-connection command to {}", port_info.port_name);
 
             // Register the port with mio and remember it for discovery
             let token = token_allocator.new_token();
-            if poll
+            match poll
                 .registry()
                 .register(&mut port, token, Interest::READABLE)
-                .is_ok()
             {
-                discovery_ports.push((token, port_info, port));
+                Ok(_) => discovery_ports.push((token, port_info, port)),
+                Err(e) => events_out.push(e.to_event(format!(
+                    "Failed to register serial port {} with mio",
+                    port_info.port_name
+                ))),
             }
         }
         discovery_ports
@@ -210,15 +228,17 @@ impl SerialTransceiver {
                     Ok(_) /*if read_bytes == 0*/ => break,
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                     Err(e) => {
-                        error!(
-                            "Unexpected serial read error on port {}: {e}",
+                        events_out.push(e.to_event(format!(
+                            "Unexpected serial read error on port {}",
                             port_info.port_name
-                        );
+                        )));
                         continue 'ports;
                     }
                 }
             }
-            let string = String::from_utf8(buf).unwrap();
+            let Ok(string) = String::from_utf8(buf) else {
+                continue;
+            };
 
             // Parse response
             let mut robot_id = None;
@@ -250,8 +270,11 @@ impl SerialTransceiver {
                     RobotTransceiverAddress::Serial(port_info),
                     robot_id,
                 ));
-            } else {
-                poll.registry().deregister(&mut port).unwrap();
+            } else if let Err(e) = poll.registry().deregister(&mut port) {
+                events_out.push(e.to_event(format!(
+                    "Failed to deregister serial port {} after being discarded during discovery",
+                    port_info.port_name
+                )));
             }
         }
     }
@@ -320,10 +343,10 @@ impl SerialConnectionState {
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => return,
                 Err(e) => {
-                    error!(
-                        "Unexpected serial read error on port {}: {e}",
+                    events_out.push(e.to_event(format!(
+                        "Unexpected serial read error on port {}",
                         self.port_info.port_name
-                    );
+                    )));
                     return;
                 }
             }

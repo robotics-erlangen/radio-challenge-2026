@@ -1,7 +1,7 @@
 use crate::driver::TokenAllocator;
-use crate::transceivers::{Transceiver, TransceiverEvent};
+use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
 use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
-use log::{error, trace, warn};
+use log::trace;
 use mio::event::Event;
 use mio::net::UdpSocket;
 use mio::{Interest, Poll};
@@ -64,14 +64,14 @@ fn bind_ipv4(addr: SocketAddrV4) -> io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_nonblocking(true)?; // Mio doesn't set nonblocking when converting from std
     socket.bind(&addr.into())?;
-    Ok(UdpSocket::from_std(socket.into()))
+    Ok(UdpSocket::from_std(socket.into())) // socket2 -> std -> mio
 }
 fn bind_ipv6(addr: SocketAddrV6) -> io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_nonblocking(true)?; // Mio doesn't set nonblocking when converting from std
     socket.set_only_v6(true)?; // By default, linux binds ipv6 sockets as dual-stack
     socket.bind(&addr.into())?;
-    Ok(UdpSocket::from_std(socket.into()))
+    Ok(UdpSocket::from_std(socket.into())) // socket2 -> std -> mio
 }
 
 #[derive(Debug)]
@@ -110,14 +110,18 @@ impl Transceiver for UdpTransceiver {
             .map_or(self.next_beacon_time, |t| t.min(self.next_beacon_time))
     }
 
-    fn send_packet(&mut self, addr: &RobotTransceiverAddress, packet: &[u8]) {
+    fn send_packet(
+        &mut self,
+        addr: &RobotTransceiverAddress,
+        packet: &[u8],
+    ) -> Result<(), TransceiverError> {
         let RobotTransceiverAddress::Udp(addr) = addr else {
-            return;
+            return Ok(()); // Skipping other addresses is expected
         };
 
-        // Check if the socket address is known
+        // Check if the socket address is known. This should always succeed because the driver already has the connection state.
         if !self.connection_timeouts.contains_key(addr) {
-            return;
+            return Ok(());
         }
 
         let result = if addr.is_ipv4() {
@@ -126,10 +130,12 @@ impl Transceiver for UdpTransceiver {
             self.data_socket_v6.socket.send_to(packet, *addr)
         };
 
-        if let Err(e) = result {
-            warn!("Failed to send udp data packet to {addr}: {e}");
-        } else {
-            trace!("Sent udp data packet to {addr}");
+        match result {
+            Ok(_) => {
+                trace!("Sent udp data packet to {addr}");
+                Ok(())
+            }
+            Err(e) => Err(e.to_error(format!("Failed to send udp data packet to {addr}"))),
         }
     }
 
@@ -155,7 +161,7 @@ impl Transceiver for UdpTransceiver {
 
         // Send beacon packets
         if now >= self.next_beacon_time {
-            self.send_beacon_packets();
+            self.send_beacon_packets(events_out);
             self.next_beacon_time += Duration::from_secs(1);
         }
     }
@@ -249,8 +255,8 @@ impl UdpTransceiver {
 
     // ======== Timeout handling ========
 
-    fn send_beacon_packets(&self) {
-        let interfaces = NetworkInterface::show().expect("Failed to list network interfaces");
+    fn send_beacon_packets(&self, events_out: &mut Vec<TransceiverEvent>) {
+        let interfaces = NetworkInterface::show().expect("Failed to list network interfaces"); // TODO: Error handling
         trace!(
             "Sending udp beacon packets: {}",
             interfaces
@@ -270,10 +276,10 @@ impl UdpTransceiver {
                     .is_ok()
                 {
                     if let Err(e) = self.discovery_socket_v4.socket.send_to(&[], BEACON_ADDR_V4) {
-                        warn!(
-                            "Failed to send ipv4 beacon packet to interface {}: {e}",
+                        events_out.push(e.to_event(format!(
+                            "Failed to send ipv4 beacon packet to interface {}",
                             iface.name
-                        );
+                        )));
                     }
                 }
             } else if iface.addr.iter().any(|a| a.ip().is_ipv6()) {
@@ -282,10 +288,10 @@ impl UdpTransceiver {
                     .is_ok()
                 {
                     if let Err(e) = self.discovery_socket_v6.socket.send_to(&[], BEACON_ADDR_V6) {
-                        warn!(
-                            "Failed to send ipv6 beacon packet to interface {}: {e}",
+                        events_out.push(e.to_event(format!(
+                            "Failed to send ipv6 beacon packet to interface {}",
                             iface.name
-                        );
+                        )));
                     }
                 }
             }
@@ -333,7 +339,7 @@ impl UdpTransceiver {
                     }
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => return,
-                Err(e) => error!("Unexpected discovery socket rx error: {e}"),
+                Err(e) => events_out.push(e.to_event("Unexpected discovery socket rx error")),
             }
         }
     }
@@ -362,7 +368,7 @@ impl UdpTransceiver {
                     ));
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => return,
-                Err(e) => error!("Unexpected data socket rx error: {e}"),
+                Err(e) => events_out.push(e.to_event("Unexpected data socket rx error")),
             }
         }
     }
