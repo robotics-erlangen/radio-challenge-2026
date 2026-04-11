@@ -6,7 +6,7 @@ use crate::transceivers::udp::UdpTransceiverConfig;
 use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
 use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress};
 use flume::{Receiver, Sender, TrySendError};
-use log::{error, info};
+use log::{error, info, warn};
 use std::io::ErrorKind;
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -199,7 +199,7 @@ impl<
         mut poll: mio::Poll,
         active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
         control_channel: Receiver<ConnectionDriverControlMessage>,
-        message_sender: Sender<ConnectionDriverEvent<RR, DR>>,
+        driver_event_out: Sender<ConnectionDriverEvent<RR, DR>>,
         config: TransceiverGroupConfig,
     ) {
         let mut events = mio::Events::with_capacity(64);
@@ -290,7 +290,7 @@ impl<
                         if !active_connections.contains_prim(&robot_id) {
                             active_connections.insert(robot_id, addr.clone(), P::default());
                             // Block on full channel because Connected messages can't be lost
-                            message_sender
+                            driver_event_out
                                 .send(ConnectionDriverEvent::Connected(robot_id, addr))
                                 .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                         }
@@ -301,7 +301,7 @@ impl<
                             active_connections.write().unwrap().remove_sec(&addr)
                         {
                             // Block on full channel because Disconnected messages can't be lost
-                            message_sender
+                            driver_event_out
                                 .send(ConnectionDriverEvent::Disconnected(robot_id))
                                 .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                         }
@@ -313,18 +313,18 @@ impl<
                         {
                             match proto.packet_received(&bytes, received_on) {
                                 // Don't block if the channel is full because some package loss is acceptable for regular packets
-                                PacketRxResult::Regular(packet) => match message_sender
+                                PacketRxResult::Regular(packet) => match driver_event_out
                                     .try_send(ConnectionDriverEvent::PacketReceived(
                                         robot_id,
                                         packet,
                                         received_on,
                                     )) {
                                         Ok(_) => {}
-                                        Err(TrySendError::Full(_)) => error!("Dropping received packet from robot {} because the message channel is full", robot_id),
+                                        Err(TrySendError::Full(_)) => warn!("Dropping received packet from robot {} because the message channel is full", robot_id),
                                         Err(_) => panic!("ConnectionDriver message receiver dropped before stopping the mio thread"),
                                     },
                                 // Block on full channel because Datagram messages can't be lost
-                                PacketRxResult::Datagram(dgram) => message_sender
+                                PacketRxResult::Datagram(dgram) => driver_event_out
                                     .send(ConnectionDriverEvent::DatagramReceived(
                                         robot_id,
                                         dgram,
@@ -336,7 +336,9 @@ impl<
                         };
                     }
                     TransceiverEvent::Error(err) => {
-                        error!("Transceiver error: {err}");
+                        driver_event_out
+                            .send(ConnectionDriverEvent::TransceiverError(err))
+                            .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                     }
                 }
             }
