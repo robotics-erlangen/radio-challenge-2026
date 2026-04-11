@@ -33,9 +33,9 @@ enum ConnectionDriverControlMessage {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConnectionDriverConfig {
-    udp_discovery_port_range: Range<u16>,
-    udp_data_port_range: Range<u16>,
-    serial_probe_period: Duration,
+    pub udp_discovery_port_range: Range<u16>,
+    pub udp_data_port_range: Range<u16>,
+    pub serial_probe_period: Duration,
 }
 
 impl Default for ConnectionDriverConfig {
