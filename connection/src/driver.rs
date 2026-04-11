@@ -1,15 +1,18 @@
 use crate::conn_stats::ConnectionStats;
 use crate::dual_map::DualHashMap;
 use crate::protocol::{PacketRxResult, RadioProtocol};
-use crate::transceivers::{TransceiverEvent, TransceiverGroup};
+use crate::transceivers::serial::SerialTransceiverConfig;
+use crate::transceivers::udp::UdpTransceiverConfig;
+use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
 use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress};
 use flume::{Receiver, Sender, TrySendError};
 use log::{error, info};
 use std::io::ErrorKind;
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const WAKER_TOKEN: mio::Token = mio::Token(0);
 
@@ -26,6 +29,37 @@ impl TokenAllocator {
 enum ConnectionDriverControlMessage {
     Send(RobotTransceiverAddress, Vec<u8>),
     Stop,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ConnectionDriverConfig {
+    udp_discovery_port_range: Range<u16>,
+    udp_data_port_range: Range<u16>,
+    serial_probe_period: Duration,
+}
+
+impl Default for ConnectionDriverConfig {
+    fn default() -> Self {
+        Self {
+            udp_discovery_port_range: 12000..12010,
+            udp_data_port_range: 12010..12020,
+            serial_probe_period: Duration::from_millis(2000),
+        }
+    }
+}
+
+impl From<ConnectionDriverConfig> for TransceiverGroupConfig {
+    fn from(config: ConnectionDriverConfig) -> Self {
+        TransceiverGroupConfig {
+            serial: SerialTransceiverConfig {
+                probe_period: config.serial_probe_period,
+            },
+            udp: UdpTransceiverConfig {
+                discovery_port_range: config.udp_discovery_port_range,
+                data_port_range: config.udp_data_port_range,
+            },
+        }
+    }
 }
 
 pub struct ConnectionDriver<
@@ -73,7 +107,7 @@ impl<
     P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
 > ConnectionDriver<RC, RR, DC, DR, P>
 {
-    pub fn start() -> Self {
+    pub fn start(config: ConnectionDriverConfig) -> Self {
         info!("Starting connection driver");
 
         // Mio setup
@@ -92,6 +126,7 @@ impl<
                     active_connections,
                     thread_control_receiver,
                     message_sender,
+                    config.into(),
                 )
             })
         };
@@ -165,12 +200,17 @@ impl<
         active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
         control_channel: Receiver<ConnectionDriverControlMessage>,
         message_sender: Sender<ConnectionDriverEvent<RR, DR>>,
+        config: TransceiverGroupConfig,
     ) {
         let mut events = mio::Events::with_capacity(64);
 
         let mut token_allocator = TokenAllocator(WAKER_TOKEN.0 + 1); // The waker is usually 0
-        let mut transceivers =
-            TransceiverGroup::init_all(&mut poll, &mut token_allocator, P::RESPONSE_PACKET_SIZE);
+        let mut transceivers = TransceiverGroup::init_all(
+            &mut poll,
+            &mut token_allocator,
+            P::RESPONSE_PACKET_SIZE,
+            config,
+        );
 
         loop {
             // Get the closest transceiver timeout

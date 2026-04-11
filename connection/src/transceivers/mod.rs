@@ -47,6 +47,14 @@ pub trait Transceiver {
     );
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct TransceiverGroupConfig {
+    #[cfg(feature = "serial")]
+    pub serial: serial::SerialTransceiverConfig,
+    #[cfg(feature = "udp")]
+    pub udp: udp::UdpTransceiverConfig,
+}
+
 pub struct TransceiverGroup {
     #[cfg(feature = "serial")]
     pub serial: Option<serial::SerialTransceiver>,
@@ -59,14 +67,15 @@ impl TransceiverGroup {
         poll: &mut mio::Poll,
         token_allocator: &mut TokenAllocator,
         packet_size: usize,
+        config: TransceiverGroupConfig,
     ) -> Self {
         Self {
             #[cfg(feature = "serial")]
-            serial: serial::SerialTransceiver::start(packet_size)
+            serial: serial::SerialTransceiver::start(packet_size, config.serial)
                 .inspect_err(|e| error!("Failed to initialize serial transceiver: {e}"))
                 .ok(),
             #[cfg(feature = "udp")]
-            udp: udp::UdpTransceiver::start(poll, token_allocator, packet_size)
+            udp: udp::UdpTransceiver::start(poll, token_allocator, packet_size, config.udp)
                 .inspect_err(|e| error!("Failed to initialize udp transceiver: {e}"))
                 .ok(),
         }

@@ -11,8 +11,12 @@ use std::io;
 use std::io::{ErrorKind, Read, Write};
 use std::time::{Duration, Instant};
 
-const DEFAULT_PROBE_PERIOD: Duration = Duration::from_millis(2000);
 const BAUD_RATE: u32 = 921600;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct SerialTransceiverConfig {
+    pub probe_period: Duration,
+}
 
 #[derive(Debug)]
 pub struct SerialTransceiver {
@@ -24,9 +28,9 @@ pub struct SerialTransceiver {
     next_conn_timeout: Option<Instant>, //TODO: Somehow enforce updating this cache with active_connections.values().map(|s| s.timeout).min()
 
     // Config. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
-    pub probe_period: Duration,
     pub id_filter: RobotIdFilter,
     pub timeout: Duration,
+    config: SerialTransceiverConfig,
     packet_size: usize,
 }
 
@@ -88,8 +92,10 @@ impl Transceiver for SerialTransceiver {
         if self.next_discovery_time < now {
             if let Some(ports) = self.active_discovery_ports.take() {
                 self.end_discovery(poll, ports, events_out);
-                self.next_discovery_time +=
-                    self.probe_period.saturating_sub(Duration::from_millis(500));
+                self.next_discovery_time += self
+                    .config
+                    .probe_period
+                    .saturating_sub(Duration::from_millis(500));
             } else {
                 self.active_discovery_ports =
                     Some(self.start_discovery(poll, token_allocator, events_out));
@@ -131,15 +137,15 @@ impl Transceiver for SerialTransceiver {
 }
 
 impl SerialTransceiver {
-    pub fn start(packet_size: usize) -> io::Result<Self> {
+    pub fn start(packet_size: usize, config: SerialTransceiverConfig) -> io::Result<Self> {
         Ok(Self {
             active_connections: DualHashMap::new(),
             active_discovery_ports: None,
             next_discovery_time: Instant::now(),
             next_conn_timeout: None,
-            probe_period: DEFAULT_PROBE_PERIOD,
             id_filter: RobotIdFilter::default(),
             timeout: DEFAULT_TIMEOUT,
+            config,
             packet_size,
         })
     }

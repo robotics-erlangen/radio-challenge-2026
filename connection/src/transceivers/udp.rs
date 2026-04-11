@@ -38,9 +38,6 @@ const BEACON_ADDR_V6: SocketAddr = SocketAddr::V6(SocketAddrV6::new(
     0,
 ));
 const DATA_PORT: u16 = 11001;
-// Multiple ports so that multiple instances can run on the same host
-const DISCOVERY_BIND_RANGE: Range<u16> = 12000..12010;
-const DATA_BIND_RANGE: Range<u16> = 12010..12020;
 
 /// Tries to bind a pair of ipv4 and ipv6 udp sockets to the same port, returning the last error if all ports in the given range fail.
 fn bind_from_range(port_range: Range<u16>) -> io::Result<(UdpSocket, UdpSocket)> {
@@ -72,6 +69,13 @@ fn bind_ipv6(addr: SocketAddrV6) -> io::Result<UdpSocket> {
     socket.set_only_v6(true)?; // By default, linux binds ipv6 sockets as dual-stack
     socket.bind(&addr.into())?;
     Ok(UdpSocket::from_std(socket.into())) // socket2 -> std -> mio
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct UdpTransceiverConfig {
+    // port ranges so that multiple instances can run on the same host
+    pub discovery_port_range: Range<u16>,
+    pub data_port_range: Range<u16>,
 }
 
 #[derive(Debug)]
@@ -197,6 +201,7 @@ impl UdpTransceiver {
         poll: &mut Poll,
         token_allocator: &mut TokenAllocator,
         packet_size: usize,
+        config: UdpTransceiverConfig,
     ) -> io::Result<Self> {
         // Allocate mio tokens
         let discovery_v4_token = token_allocator.new_token();
@@ -205,8 +210,8 @@ impl UdpTransceiver {
         let data_v6_token = token_allocator.new_token();
 
         // Bind sockets
-        let mut discovery_sockets = bind_from_range(DISCOVERY_BIND_RANGE)?;
-        let mut data_sockets = bind_from_range(DATA_BIND_RANGE)?;
+        let mut discovery_sockets = bind_from_range(config.discovery_port_range)?;
+        let mut data_sockets = bind_from_range(config.data_port_range)?;
 
         // Register the sockets to the caller's poll instance
         poll.registry().register(
