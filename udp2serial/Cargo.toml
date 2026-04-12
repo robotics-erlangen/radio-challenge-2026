@@ -1,0 +1,11 @@
+[package]
+name = "udp2serial"
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+rust-version.workspace = true
+
+[dependencies]
+serialport.workspace = true
+cobs.workspace = true
+network-interface.workspace = true
+socket2.workspace = true
