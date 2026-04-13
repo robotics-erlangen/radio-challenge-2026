@@ -93,9 +93,10 @@ pub struct UdpTransceiver {
     next_beacon_time: Instant,
     next_conn_timeout: Option<Instant>,
 
-    // Config. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
-    pub timeout: Duration,
+    // Filter for incoming connections. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
     pub id_filter: RobotIdFilter,
+    pub timeout: Duration,
+    config: UdpTransceiverConfig,
 }
 
 #[derive(Debug)]

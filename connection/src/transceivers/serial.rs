@@ -27,7 +27,7 @@ pub struct SerialTransceiver {
     next_discovery_time: Instant,
     next_conn_timeout: Option<Instant>, //TODO: Somehow enforce updating this cache with active_connections.values().map(|s| s.timeout).min()
 
-    // Config. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
+    // Filter for incoming connections. Public because it could be set directly, but usually the Transceiver trait function is used instead.
     pub id_filter: RobotIdFilter,
     pub timeout: Duration,
     config: SerialTransceiverConfig,
