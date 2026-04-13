@@ -1,7 +1,7 @@
 use crate::driver::TokenAllocator;
 use crate::dual_map::DualHashMap;
 use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
-use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
+use crate::{DEFAULT_CONNECTION_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
 use log::trace;
 use mio::event::Event;
 use mio::{Interest, Poll};
@@ -29,7 +29,7 @@ pub struct SerialTransceiver {
 
     // Filter for incoming connections. Public because it could be set directly, but usually the Transceiver trait function is used instead.
     pub id_filter: RobotIdFilter,
-    pub timeout: Duration,
+    pub connection_timeout: Duration,
     config: SerialTransceiverConfig,
     packet_size: usize,
 }
@@ -128,7 +128,7 @@ impl Transceiver for SerialTransceiver {
     ) {
         // Filter out discovery tokens, they will be handled separately
         if let Some((_port_name, conn)) = self.active_connections.get_prim_mut(&event.token()) {
-            conn.receive_serial_packets(self.timeout, events_out);
+            conn.receive_serial_packets(self.connection_timeout, events_out);
             if self.next_conn_timeout.is_some_and(|old| conn.timeout < old) {
                 self.next_conn_timeout = Some(conn.timeout);
             }
@@ -144,7 +144,7 @@ impl SerialTransceiver {
             next_discovery_time: Instant::now(),
             next_conn_timeout: None,
             id_filter: RobotIdFilter::default(),
-            timeout: DEFAULT_TIMEOUT,
+            connection_timeout: DEFAULT_CONNECTION_TIMEOUT,
             config,
             packet_size,
         })
@@ -263,7 +263,7 @@ impl SerialTransceiver {
                     port_info: port_info.clone(),
                     rx_buf: vec![0; self.packet_size + 2].into_boxed_slice(), // +1 for checksum, +1 for cobs overhead byte. TODO: Replace with a statically sized array when feature(generic_const_exprs) lands
                     rx_buf_pos: 0,
-                    timeout: Instant::now() + self.timeout,
+                    timeout: Instant::now() + self.connection_timeout,
                 };
                 self.next_conn_timeout = Some(
                     self.next_conn_timeout

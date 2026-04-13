@@ -9,7 +9,7 @@ pub mod periodic;
 pub mod protocol;
 mod transceivers;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_millis(1000);
+const DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 pub enum ConnectionDriverEvent<RR, DR> {

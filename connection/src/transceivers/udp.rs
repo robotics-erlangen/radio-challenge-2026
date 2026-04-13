@@ -1,6 +1,6 @@
 use crate::driver::TokenAllocator;
 use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
-use crate::{DEFAULT_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
+use crate::{DEFAULT_CONNECTION_TIMEOUT, RobotIdFilter, RobotTransceiverAddress};
 use log::trace;
 use mio::event::Event;
 use mio::net::UdpSocket;
@@ -95,7 +95,7 @@ pub struct UdpTransceiver {
 
     // Filter for incoming connections. Public because it could be set directly, but usually the Transceiver trait functions are used instead.
     pub id_filter: RobotIdFilter,
-    pub timeout: Duration,
+    pub connection_timeout: Duration,
     config: UdpTransceiverConfig,
 }
 
@@ -254,7 +254,7 @@ impl UdpTransceiver {
             next_beacon_time: Instant::now() + Duration::from_secs(1),
             next_conn_timeout: None,
 
-            timeout: DEFAULT_TIMEOUT,
+            connection_timeout: DEFAULT_CONNECTION_TIMEOUT,
             id_filter: RobotIdFilter::default(),
         })
     }
@@ -337,7 +337,7 @@ impl UdpTransceiver {
 
                     // Insert into the connection map
                     if let Entry::Vacant(e) = self.connection_timeouts.entry(data_addr) {
-                        e.insert(Instant::now() + self.timeout);
+                        e.insert(Instant::now() + self.connection_timeout);
                         events_out.push(TransceiverEvent::Connected(
                             RobotTransceiverAddress::Udp(data_addr),
                             robot_id,
@@ -365,7 +365,7 @@ impl UdpTransceiver {
                         continue;
                     };
 
-                    *connection_timeout = Instant::now() + self.timeout;
+                    *connection_timeout = Instant::now() + self.connection_timeout;
                     trace!("Received udp packet from {src_addr}");
                     events_out.push(TransceiverEvent::PacketReceived(
                         RobotTransceiverAddress::Udp(src_addr),
