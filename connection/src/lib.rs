@@ -1,5 +1,5 @@
 use crate::transceivers::{RobotTransceiverAddress, TransceiverError};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub mod cache;
 pub mod conn_stats;
@@ -8,8 +8,6 @@ mod dual_map;
 pub mod periodic;
 pub mod protocol;
 mod transceivers;
-
-const DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 pub enum ConnectionDriverEvent<RR, DR> {

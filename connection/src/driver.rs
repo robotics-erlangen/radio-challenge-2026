@@ -35,7 +35,9 @@ enum ConnectionDriverControlMessage {
 pub struct ConnectionDriverConfig {
     pub udp_discovery_port_range: Range<u16>,
     pub udp_data_port_range: Range<u16>,
+    pub udp_connection_timeout: Duration,
     pub serial_probe_period: Duration,
+    pub serial_connection_timeout: Duration,
 }
 
 impl Default for ConnectionDriverConfig {
@@ -43,7 +45,9 @@ impl Default for ConnectionDriverConfig {
         Self {
             udp_discovery_port_range: 12000..12010,
             udp_data_port_range: 12010..12020,
+            udp_connection_timeout: Duration::from_millis(1000),
             serial_probe_period: Duration::from_millis(2000),
+            serial_connection_timeout: Duration::from_millis(1000),
         }
     }
 }
@@ -53,10 +57,12 @@ impl From<ConnectionDriverConfig> for TransceiverGroupConfig {
         TransceiverGroupConfig {
             serial: SerialTransceiverConfig {
                 probe_period: config.serial_probe_period,
+                connection_timeout: config.serial_connection_timeout,
             },
             udp: UdpTransceiverConfig {
                 discovery_port_range: config.udp_discovery_port_range,
                 data_port_range: config.udp_data_port_range,
+                connection_timeout: config.udp_connection_timeout,
             },
         }
     }
