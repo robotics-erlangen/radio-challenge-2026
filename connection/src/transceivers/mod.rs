@@ -116,6 +116,7 @@ pub enum RobotTransceiverAddress {
     Serial(SerialPortInfo),
     #[cfg(feature = "udp")]
     Udp(SocketAddr),
+    Test(u8),
 }
 
 impl Hash for RobotTransceiverAddress {
@@ -125,6 +126,7 @@ impl Hash for RobotTransceiverAddress {
             RobotTransceiverAddress::Serial(port) => port.port_name.hash(state),
             #[cfg(feature = "udp")]
             RobotTransceiverAddress::Udp(ip) => ip.hash(state),
+            RobotTransceiverAddress::Test(id) => id.hash(state),
         }
     }
 }
@@ -136,6 +138,7 @@ impl Display for RobotTransceiverAddress {
             RobotTransceiverAddress::Serial(port) => f.write_str(&port.port_name),
             #[cfg(feature = "udp")]
             RobotTransceiverAddress::Udp(ip) => f.write_fmt(format_args!("{ip}")),
+            RobotTransceiverAddress::Test(id) => f.write_fmt(format_args!("{id}")),
         }
     }
 }
