@@ -194,3 +194,123 @@ where
         self.prim_to_val.iter_mut().map(|(_k1, (_k2, v))| v)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DualHashMap;
+
+    #[test]
+    fn insert() {
+        let mut map = DualHashMap::new();
+        map.insert(1u8, "a", 10);
+
+        assert_eq!(map.len(), 1);
+        assert!(!map.is_empty());
+        assert!(map.contains_prim(&1));
+        assert!(map.contains_sec("a"));
+
+        assert_eq!(map.get_prim(&1), Some((&"a", &10)));
+        assert_eq!(map.get_sec("a"), Some((&1u8, &10)));
+    }
+
+    #[test]
+    fn remove() {
+        let mut map = DualHashMap::new();
+        map.insert(1u8, "k1", 10);
+        map.insert(2u8, "k2", 20);
+
+        assert_eq!(map.remove_prim(&1), Some(("k1", 10)));
+        assert!(!map.contains_prim(&1));
+        assert!(!map.contains_sec("k1"));
+
+        assert_eq!(map.remove_sec("k2"), Some((2u8, 20)));
+        assert!(!map.contains_prim(&2));
+        assert!(!map.contains_sec("k2"));
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn insert_fully_replaces_partial_duplicates() {
+        let mut map = DualHashMap::new();
+        map.insert(1u8, "a", 100);
+        map.insert(2u8, "b", 200);
+
+        // Reuse primary key 1 with a new secondary key; old secondary key "a" must disappear.
+        map.insert(1u8, "c", 300);
+        assert_eq!(map.len(), 2);
+        assert!(!map.contains_sec("a"));
+        assert_eq!(map.get_prim(&1), Some((&"c", &300)));
+        assert_eq!(map.get_sec("c"), Some((&1u8, &300)));
+
+        // Reuse secondary key "b" with a new primary key; old primary key 2 must disappear.
+        map.insert(3u8, "b", 400);
+        assert_eq!(map.len(), 2);
+        assert!(!map.contains_prim(&2));
+        assert_eq!(map.get_sec("b"), Some((&3u8, &400)));
+    }
+
+    #[test]
+    fn mutable_access() {
+        let mut map = DualHashMap::new();
+        map.insert(1u8, "x", 5);
+
+        let (_, value) = map.get_prim_mut(&1).unwrap();
+        *value += 7;
+
+        let (_, value) = map.get_sec_mut("x").unwrap();
+        *value *= 2;
+
+        assert_eq!(map.get_prim(&1), Some((&"x", &24)));
+        assert_eq!(map.get_sec("x"), Some((&1u8, &24)));
+    }
+
+    #[test]
+    fn retain_and_iterators() {
+        let mut map = DualHashMap::new();
+        map.insert(1u8, "one", 1i32);
+        map.insert(2u8, "two", 2i32);
+        map.insert(3u8, "three", 3i32);
+
+        map.retain(|k1, _k2, v| {
+            *v *= 10;
+            k1 % 2 == 1
+        });
+
+        assert_eq!(map.len(), 2);
+        assert!(!map.contains_prim(&2));
+        assert!(!map.contains_sec("two"));
+
+        for value in map.values_mut() {
+            *value += 1;
+        }
+
+        let mut entries = map
+            .iter()
+            .map(|(k1, k2, v)| (*k1, *k2, *v))
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|(k1, _, _)| *k1);
+        assert_eq!(entries, vec![(1, "one", 11), (3, "three", 31)]);
+
+        let mut keys = map.keys().map(|(k1, k2)| (*k1, *k2)).collect::<Vec<_>>();
+        keys.sort_unstable_by_key(|(k1, _)| *k1);
+        assert_eq!(keys, vec![(1, "one"), (3, "three")]);
+
+        let mut values = map.values().copied().collect::<Vec<_>>();
+        values.sort_unstable();
+        assert_eq!(values, vec![11, 31]);
+    }
+
+    #[test]
+    fn random_stuff() {
+        // Capacity
+        let mut map = DualHashMap::<u8, String, i32>::with_capacity(4);
+        map.insert(1u8, "right".to_string(), 9);
+
+        // Borrow conversion (&str as key instead of &String)
+        assert_eq!(map.get_sec("right"), Some((&1u8, &9)));
+
+        // Clear
+        map.clear();
+        assert!(map.is_empty());
+    }
+}
