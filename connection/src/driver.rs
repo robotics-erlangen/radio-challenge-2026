@@ -5,8 +5,9 @@ use crate::transceivers::serial::SerialTransceiverConfig;
 use crate::transceivers::udp::UdpTransceiverConfig;
 use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
 use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress};
-use flume::{Receiver, Sender, TrySendError};
+use flume::{Receiver, SendError, Sender, TrySendError};
 use log::{error, info, warn};
+use std::error::Error;
 use std::io::ErrorKind;
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -23,6 +24,31 @@ impl TokenAllocator {
         let token = mio::Token(self.0);
         self.0 += 1;
         token
+    }
+}
+
+pub struct WakingSender<T> {
+    waker: mio::Waker,
+    sender: Sender<T>,
+}
+
+impl<T: 'static> WakingSender<T> {
+    pub fn new(waker: mio::Waker, sender: Sender<T>) -> Self {
+        Self { waker, sender }
+    }
+
+    pub fn send(&self, t: T) -> Result<(), Box<dyn Error>> {
+        self.sender.send(t)?;
+        self.waker.wake()?;
+        Ok(())
+    }
+
+    pub fn send_batch(&self, ts: impl IntoIterator<Item = T>) -> Result<(), Box<dyn Error>> {
+        ts.into_iter()
+            .map(|t| self.sender.send(t))
+            .collect::<Result<(), SendError<T>>>()?;
+        self.waker.wake()?;
+        Ok(())
     }
 }
 
@@ -76,9 +102,7 @@ pub struct ConnectionDriver<
     P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
 > {
     thread: Option<JoinHandle<()>>,
-    /// ALWAYS CALL THE WAKER AFTER SUBMITTING A MESSAGE
-    thread_control_channel: Sender<ConnectionDriverControlMessage>,
-    thread_control_waker: mio::Waker,
+    thread_control_channel: WakingSender<ConnectionDriverControlMessage>,
 
     active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
 
@@ -99,7 +123,6 @@ impl<
         _ = self
             .thread_control_channel
             .send(ConnectionDriverControlMessage::Stop);
-        _ = self.thread_control_waker.wake();
         // Immediately dropping the waker can cause the event to be lost
         _ = self.thread.take().unwrap().join();
     }
@@ -139,8 +162,7 @@ impl<
 
         ConnectionDriver {
             thread: Some(thread),
-            thread_control_channel: thread_control_sender,
-            thread_control_waker: waker,
+            thread_control_channel: WakingSender::new(waker, thread_control_sender),
             active_connections,
             out_channel: message_receiver,
             _phantom_data: PhantomData,
@@ -161,7 +183,6 @@ impl<
         self.thread_control_channel
             .send(ConnectionDriverControlMessage::Send(addr.clone(), bytes))
             .unwrap();
-        self.thread_control_waker.wake().unwrap();
     }
 
     pub fn queue_datagram(&self, robot_id: u8, datagram: DC) {
