@@ -5,7 +5,7 @@ use crate::transceivers::serial::SerialTransceiverConfig;
 use crate::transceivers::udp::UdpTransceiverConfig;
 use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
 use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress};
-use flume::{Receiver, SendError, Sender, TrySendError};
+use flume::{Receiver, Sender, TrySendError};
 use log::{error, info, warn};
 use std::error::Error;
 use std::io::ErrorKind;
@@ -44,9 +44,7 @@ impl<T: 'static> WakingSender<T> {
     }
 
     pub fn send_batch(&self, ts: impl IntoIterator<Item = T>) -> Result<(), Box<dyn Error>> {
-        ts.into_iter()
-            .map(|t| self.sender.send(t))
-            .collect::<Result<(), SendError<T>>>()?;
+        ts.into_iter().try_for_each(|t| self.sender.send(t))?;
         self.waker.wake()?;
         Ok(())
     }
