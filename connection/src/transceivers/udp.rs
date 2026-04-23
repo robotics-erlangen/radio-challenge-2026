@@ -71,7 +71,7 @@ fn bind_ipv6(addr: SocketAddrV6) -> io::Result<UdpSocket> {
     Ok(UdpSocket::from_std(socket.into())) // socket2 -> std -> mio
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UdpTransceiverConfig {
     // port ranges so that multiple instances can run on the same host
     pub discovery_port_range: Range<u16>,

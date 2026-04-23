@@ -59,7 +59,7 @@ fn normalize_angle(mut angle: f32) -> f32 {
  * ======================
  */
 
-#[derive(Clone, Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
 pub struct PacketHeader {
     /// Overflowing packet counter to determine packet loss
@@ -74,7 +74,7 @@ pub struct PacketHeader {
 
 impl DekuPackedSize<HEADER_SIZE> for PacketHeader {}
 
-#[derive(Clone, Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
 pub struct DatagramPayload<
     TypeTag: DekuReader<'static, (Endian, Order)> + DekuWriter<(Endian, Order)>,
@@ -445,7 +445,7 @@ pub struct RegularResponsePayload {
     pub unused: u16,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(
     endian = "endian",
     bit_order = "bit_order",
@@ -462,7 +462,7 @@ pub struct MotorStatus {
     pub unused: u8,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(
     endian = "endian",
     bit_order = "bit_order",
@@ -477,7 +477,7 @@ pub struct KickerStatus {
     pub unused: u8,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(
     endian = "endian",
     bit_order = "bit_order",
@@ -490,7 +490,7 @@ pub struct IMUStatus {
     pub unused: u8,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(
     endian = "endian",
     bit_order = "bit_order",

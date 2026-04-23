@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 const BAUD_RATE: u32 = 921600;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SerialTransceiverConfig {
     pub probe_period: Duration,
     pub connection_timeout: Duration,

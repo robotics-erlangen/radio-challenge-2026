@@ -17,10 +17,13 @@ pub mod udp;
 // ======== Transceiver trait ========
 
 pub trait Transceiver {
+    /// Sets the transceiver's discovery filter. Only connections to robots that pass this filter should be accepted.
     fn set_id_filter(&mut self, id_filter: RobotIdFilter);
 
+    /// Returns the transceiver's next timeout.
     fn next_timeout(&self) -> Instant;
 
+    /// Sends a serialized packet to the specified address. Calls with another transceiver's address should be ignored.
     // Single packet send -> single io operation -> returned error is enough
     fn send_packet(
         &mut self,
@@ -28,6 +31,7 @@ pub trait Transceiver {
         packet: &[u8],
     ) -> Result<(), TransceiverError>;
 
+    /// Callback that is called on **every** transceiver when any transceiver timeout occurs. Used to check internal timeouts and process them if applicable.
     // Could trigger multiple io operations -> return errors as part of the event stream
     fn mio_timeout(
         &mut self,
@@ -37,6 +41,7 @@ pub trait Transceiver {
         events_out: &mut Vec<TransceiverEvent>,
     );
 
+    /// Callback that is called on **every** transceiver when a mio event occurs. Calls with unknown tokens should be ignored.
     // Could trigger multiple io operations -> return errors as part of the event stream
     fn mio_event(
         &mut self,
@@ -47,7 +52,7 @@ pub trait Transceiver {
     );
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransceiverGroupConfig {
     #[cfg(feature = "serial")]
     pub serial: serial::SerialTransceiverConfig,
@@ -55,6 +60,7 @@ pub struct TransceiverGroupConfig {
     pub udp: udp::UdpTransceiverConfig,
 }
 
+/// A set of all available transceivers. Access them using the `iter` methods. Helps to keep all the cfg(feature) checks in one place.
 pub struct TransceiverGroup {
     #[cfg(feature = "serial")]
     pub serial: Option<serial::SerialTransceiver>,
@@ -110,7 +116,7 @@ impl TransceiverGroup {
 
 // ======== Transceiver api types ========
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RobotTransceiverAddress {
     #[cfg(feature = "serial")]
     Serial(SerialPortInfo),

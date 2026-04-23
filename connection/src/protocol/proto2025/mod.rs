@@ -97,7 +97,6 @@ impl<
         self.stat_tracker.get()
     }
 
-    /// Unpacks a packet and updates internal connection state
     fn packet_received(
         &mut self,
         bytes: &[u8],
@@ -156,7 +155,6 @@ impl<
         self.datagram_queue.push_back(datagram);
     }
 
-    /// Prepares a packet for sending. If a datagram packet is available, it will be used instead.
     fn next_packet(&mut self, regular_data: RC) -> Vec<u8> {
         let mut packet = vec![0; PACKET_SIZE];
 
@@ -432,7 +430,7 @@ mod tests {
         );
     }
 
-    /// Datagrams must be retransmitted if no ack is received in time
+    /// Datagrams must be retransmitted if no ack is received in time. Depends on empty_datagram.
     #[test]
     fn datagram_resend() {
         let mut proto = RadioProtocol2025::new();
@@ -475,7 +473,7 @@ mod tests {
         assert!(got_resend, "Didn't resend a \"lost\" datagram");
     }
 
-    /// Multiple datagrams should be queueable at once. Depends on empty_datagrams
+    /// Multiple datagrams should be queueable at once. Depends on empty_datagram.
     #[test]
     fn datagram_queue() {
         let mut proto = RadioProtocol2025::new();

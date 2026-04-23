@@ -3,14 +3,14 @@ use deku::{DekuContainerRead, DekuError, DekuRead, DekuWrite};
 
 // ======== Data structs ========
 
-#[derive(Clone, Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
 pub struct EchoDatagram {
     pub data: [u8; 100],
 }
 impl DekuPackedSize<100> for EchoDatagram {}
 
-#[derive(Clone, Debug, Default, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(endian = "little", bit_order = "lsb")]
 pub struct BoardIdsResponseDatagram {
     pub main: [u32; 3],
@@ -37,7 +37,7 @@ impl DekuPackedSize<55> for WriteKickCalibrationCommandDatagram {}
 
 // ======== Command helpers ========
 
-#[derive(Clone, Copy, Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(
     bits = 7,
     id_type = "u8",
@@ -100,7 +100,7 @@ impl From<CommandDatagram> for (CommandDatagramType, Vec<u8>) {
 
 // ======== Response helpers ========
 
-#[derive(Clone, Copy, Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DekuRead, DekuWrite)]
 #[deku(
     bits = 7,
     id_type = "u8",

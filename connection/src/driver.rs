@@ -362,7 +362,7 @@ impl<
                     }
                     TransceiverEvent::Error(err) => {
                         driver_event_out
-                            .send(ConnectionDriverEvent::TransceiverError(err))
+                            .send(ConnectionDriverEvent::TransceiverError(Arc::new(err)))
                             .expect("ConnectionDriver message receiver dropped before stopping the mio thread");
                     }
                 }

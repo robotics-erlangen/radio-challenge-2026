@@ -62,7 +62,7 @@ impl<const N: usize> PacketUnpacking<N> for Box<[u8; N]> {
     }
 }
 
-/// Marker trait providing a PacketPacking and PacketUnpacking implementations for deku structs
+/// Marker trait providing PacketPacking and PacketUnpacking implementations for deku structs
 pub trait DekuPackedSize<const SIZE: usize>:
     DekuContainerWrite + for<'a> DekuContainerRead<'a>
 {
