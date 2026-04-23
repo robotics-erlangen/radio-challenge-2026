@@ -1,4 +1,4 @@
-use crate::conn_stats::ConnectionStats;
+use crate::utils::conn_stats::ConnectionStats;
 use std::fmt::{Debug, Formatter};
 use std::time::Instant;
 

@@ -1,7 +1,7 @@
-use crate::conn_stats::{ConnectionStatTracker, ConnectionStats};
 use crate::protocol::deku_helpers::{PacketPacking, PacketUnpacking};
 use crate::protocol::proto2025::packet::*;
 use crate::protocol::{PacketRxResult, RadioProtocol};
+use crate::utils::conn_stats::{ConnectionStatTracker, ConnectionStats};
 use datagrams::{CommandDatagram, CommandDatagramType, ResponseDatagram, ResponseDatagramType};
 use std::collections::VecDeque;
 use std::time::Instant;

@@ -1,6 +1,6 @@
-use crate::conn_stats::ConnectionStats;
 use crate::driver::ConnectionDriver;
 use crate::protocol::RadioProtocol;
+use crate::utils::conn_stats::ConnectionStats;
 use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
 use flume::Sender;
 use std::collections::HashMap;

@@ -105,7 +105,7 @@ impl ConnectionStatTracker {
 #[cfg(test)]
 mod tests {
     use super::ConnectionStatTracker;
-    use crate::conn_stats::ConnectionStats;
+    use crate::utils::conn_stats::ConnectionStats;
     use std::time::{Duration, Instant};
 
     #[test]

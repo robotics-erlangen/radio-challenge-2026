@@ -1,10 +1,11 @@
-use crate::conn_stats::ConnectionStats;
-use crate::dual_map::DualHashMap;
 use crate::protocol::{PacketRxResult, RadioProtocol};
 use crate::transceivers::serial::SerialTransceiverConfig;
 use crate::transceivers::udp::UdpTransceiverConfig;
 use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
-use crate::{ConnectionDriverEvent, RobotIdFilter, RobotTransceiverAddress};
+use crate::utils::conn_stats::ConnectionStats;
+use crate::utils::dual_map::DualHashMap;
+use crate::utils::id_filter::RobotIdFilter;
+use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
 use flume::{Receiver, Sender, TrySendError};
 use log::{error, info, warn};
 use std::error::Error;

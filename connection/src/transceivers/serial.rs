@@ -1,7 +1,8 @@
+use crate::RobotTransceiverAddress;
 use crate::driver::TokenAllocator;
-use crate::dual_map::DualHashMap;
 use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
-use crate::{RobotIdFilter, RobotTransceiverAddress};
+use crate::utils::dual_map::DualHashMap;
+use crate::utils::id_filter::RobotIdFilter;
 use log::trace;
 use mio::event::Event;
 use mio::{Interest, Poll};

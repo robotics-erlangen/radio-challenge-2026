@@ -1,6 +1,7 @@
+use crate::RobotTransceiverAddress;
 use crate::driver::TokenAllocator;
 use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
-use crate::{RobotIdFilter, RobotTransceiverAddress};
+use crate::utils::id_filter::RobotIdFilter;
 use log::trace;
 use mio::event::Event;
 use mio::net::UdpSocket;
