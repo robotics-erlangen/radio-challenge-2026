@@ -16,7 +16,7 @@ const BEACON_ADDR_V6: SocketAddrV6 = SocketAddrV6::new(
 const DATA_PORT: u16 = 11001;
 const PACKET_SIZE: usize = 29;
 
-const BAUD_RATE: u32 = 921600 / 4;
+const BAUD_RATE: u32 = 921600;
 const TIMEOUT: Duration = Duration::from_secs(1);
 
 fn bind_ipv4(port: u16) -> io::Result<UdpSocket> {
