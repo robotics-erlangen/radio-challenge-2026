@@ -159,7 +159,11 @@ impl SerialTransceiver {
         events_out: &mut Vec<TransceiverEvent>,
     ) -> Vec<(mio::Token, SerialPortInfo, SerialStream)> {
         let new_ports = mio_serial::available_ports()
-            .expect("Failed to list serial ports") // TODO: Gracefully handle serial port list errors
+            .unwrap_or_else(|e| {
+                events_out
+                    .push(io::Error::from(e).to_event("Failed to list serial ports".to_string()));
+                Vec::new()
+            })
             .into_iter()
             // Filter by port info
             .filter(|p| match p.port_type.clone() {

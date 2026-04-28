@@ -263,7 +263,30 @@ impl UdpTransceiver {
     // ======== Timeout handling ========
 
     fn send_beacon_packets(&self, events_out: &mut Vec<TransceiverEvent>) {
-        let interfaces = NetworkInterface::show().expect("Failed to list network interfaces"); // TODO: Error handling
+        let interfaces = match NetworkInterface::show() {
+            Ok(interfaces) if !interfaces.is_empty() => interfaces,
+            Ok(_) => {
+                events_out.push(
+                    TransceiverError {
+                        msg: "Found no network interfaces".to_owned(),
+                        source: None,
+                    }
+                    .into(),
+                );
+                return;
+            }
+            Err(_e) => {
+                // TODO: Set error source
+                events_out.push(
+                    TransceiverError {
+                        msg: "Failed to list network interfaces".to_owned(),
+                        source: None,
+                    }
+                    .into(),
+                );
+                return;
+            }
+        };
         trace!(
             "Sending udp beacon packets: {}",
             interfaces
