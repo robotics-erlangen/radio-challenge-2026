@@ -1,5 +1,7 @@
 use crate::protocol::{PacketRxResult, RadioProtocol};
+#[cfg(feature = "serial")]
 use crate::transceivers::serial::SerialTransceiverConfig;
+#[cfg(feature = "udp")]
 use crate::transceivers::udp::UdpTransceiverConfig;
 use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
 use crate::utils::conn_stats::ConnectionStats;
@@ -80,10 +82,12 @@ impl Default for ConnectionDriverConfig {
 impl From<ConnectionDriverConfig> for TransceiverGroupConfig {
     fn from(config: ConnectionDriverConfig) -> Self {
         TransceiverGroupConfig {
+            #[cfg(feature = "serial")]
             serial: SerialTransceiverConfig {
                 probe_period: config.serial_probe_period,
                 connection_timeout: config.serial_connection_timeout,
             },
+            #[cfg(feature = "udp")]
             udp: UdpTransceiverConfig {
                 discovery_port_range: config.udp_discovery_port_range,
                 data_port_range: config.udp_data_port_range,
