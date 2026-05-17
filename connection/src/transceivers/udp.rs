@@ -2,7 +2,7 @@ use crate::RobotTransceiverAddress;
 use crate::driver::TokenAllocator;
 use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
 use crate::utils::id_filter::RobotIdFilter;
-use log::trace;
+use log::{debug, trace};
 use mio::event::Event;
 use mio::net::UdpSocket;
 use mio::{Interest, Poll};
@@ -156,6 +156,7 @@ impl Transceiver for UdpTransceiver {
         if self.next_conn_timeout.is_some_and(|t| t < now) {
             self.connection_timeouts.retain(|&addr, t| {
                 if *t < now {
+                    debug!("UDP connection to {addr} timed out");
                     events_out.push(TransceiverEvent::Disconnected(addr.into()));
                     false
                 } else {

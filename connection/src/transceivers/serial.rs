@@ -3,7 +3,7 @@ use crate::driver::TokenAllocator;
 use crate::transceivers::{IoToTransceiverError, Transceiver, TransceiverError, TransceiverEvent};
 use crate::utils::dual_map::DualHashMap;
 use crate::utils::id_filter::RobotIdFilter;
-use log::trace;
+use log::{debug, trace};
 use mio::event::Event;
 use mio::{Interest, Poll};
 pub use mio_serial::SerialPortInfo;
@@ -108,6 +108,10 @@ impl Transceiver for SerialTransceiver {
         if self.next_conn_timeout.is_some_and(|t| t < now) {
             self.active_connections.retain(|_, _, state| {
                 if state.timeout < now {
+                    debug!(
+                        "Serial connection to {} timed out",
+                        state.port_info.port_name
+                    );
                     events_out.push(TransceiverEvent::Disconnected(
                         state.port_info.clone().into(),
                     ));
@@ -160,8 +164,7 @@ impl SerialTransceiver {
     ) -> Vec<(mio::Token, SerialPortInfo, SerialStream)> {
         let new_ports = mio_serial::available_ports()
             .unwrap_or_else(|e| {
-                events_out
-                    .push(io::Error::from(e).to_event("Failed to list serial ports".to_string()));
+                events_out.push(io::Error::from(e).to_event("Failed to list serial ports"));
                 Vec::new()
             })
             .into_iter()

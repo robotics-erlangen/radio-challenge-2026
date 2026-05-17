@@ -9,7 +9,7 @@ use crate::utils::dual_map::DualHashMap;
 use crate::utils::id_filter::RobotIdFilter;
 use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
 use flume::{Receiver, Sender, TrySendError};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::error::Error;
 use std::io::ErrorKind;
 use std::marker::PhantomData;
@@ -318,6 +318,7 @@ impl<
                     TransceiverEvent::Connected(addr, robot_id) => {
                         let mut active_connections = active_connections.write().unwrap();
                         if !active_connections.contains_prim(&robot_id) {
+                            debug!("Robot {} connected at address {}", robot_id, addr);
                             active_connections.insert(robot_id, addr.clone(), P::default());
                             // Block on full channel because Connected messages can't be lost
                             driver_event_out
@@ -330,6 +331,7 @@ impl<
                         if let Some((robot_id, _proto)) =
                             active_connections.write().unwrap().remove_sec(&addr)
                         {
+                            debug!("Robot {} disconnected from address {}", robot_id, addr);
                             // Block on full channel because Disconnected messages can't be lost
                             driver_event_out
                                 .send(ConnectionDriverEvent::Disconnected(robot_id))
