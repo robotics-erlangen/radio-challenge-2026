@@ -1,3 +1,6 @@
+#[cfg(feature = "mock")]
+mod mock;
+#[cfg(not(feature = "mock"))]
 mod serial;
 
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
@@ -6,8 +9,6 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{io, thread};
-
-use crate::serial::start_udp_serial_bridge;
 
 const BEACON_ADDR_V4: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(239, 0, 0, 1), 11000);
 const BEACON_ADDR_V6: SocketAddrV6 = SocketAddrV6::new(
@@ -32,10 +33,34 @@ fn bind_ipv6(port: u16) -> io::Result<UdpSocket> {
     socket.bind(&SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0).into())?;
     Ok(socket.into())
 }
+#[cfg(feature = "mock")]
+fn bind_dual_stack(port: u16) -> io::Result<UdpSocket> {
+    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_only_v6(false)?; // Dual stack mode is the default on linux, but must be explicitly set on windows
+    socket.bind(&SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0).into())?;
+    Ok(socket.into())
+}
 
 fn main() {
     let last_received_time = Arc::new(RwLock::new(Instant::now()));
-    let robot_id = start_udp_serial_bridge(last_received_time.clone());
+    let robot_id;
+    #[cfg(not(feature = "mock"))]
+    {
+        println!("Starting serial bridge...");
+        println!();
+        robot_id = serial::start_udp_serial_bridge(last_received_time.clone());
+    }
+    #[cfg(feature = "mock")]
+    {
+        println!("Starting mock responder...");
+        println!();
+        robot_id = mock::start_mock_responder(
+            last_received_time.clone(),
+            Duration::from_millis(2),
+            0.0,
+            0.0,
+        );
+    }
 
     // ======== Discovery loop ========
 
