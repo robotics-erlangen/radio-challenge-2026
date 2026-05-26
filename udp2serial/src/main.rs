@@ -33,7 +33,6 @@ fn bind_ipv6(port: u16) -> io::Result<UdpSocket> {
     socket.bind(&SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0).into())?;
     Ok(socket.into())
 }
-#[cfg(feature = "mock")]
 fn bind_dual_stack(port: u16) -> io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_only_v6(false)?; // Dual stack mode is the default on linux, but must be explicitly set on windows

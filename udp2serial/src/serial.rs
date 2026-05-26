@@ -1,5 +1,4 @@
 use serialport::SerialPort;
-use std::net::UdpSocket;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{io, thread};
@@ -26,28 +25,30 @@ pub fn start_udp_serial_bridge(last_received_time: Arc<RwLock<Instant>>) -> u8 {
     let robot_id = query_robot_id(&mut read_port);
     println!("Robot ID: {robot_id}");
 
-    let rx_socket_v4 = crate::bind_ipv4(DATA_PORT).unwrap();
-    let rx_socket_v6 = crate::bind_ipv6(DATA_PORT).unwrap();
-    let tx_socket_v4 = rx_socket_v4.try_clone().unwrap();
-    let tx_socket_v6 = rx_socket_v6.try_clone().unwrap();
+    let rx_socket = crate::bind_dual_stack(DATA_PORT).unwrap();
+    let tx_socket = rx_socket.try_clone().unwrap();
 
     let last_command_addr = Arc::new(RwLock::new(None));
 
     // Udp -> Serial
-    let spawn_receive_thread = |socket: UdpSocket| {
+    {
         let mut write_port = read_port.try_clone().unwrap();
         let last_command_addr = last_command_addr.clone();
         let last_received_time = last_received_time.clone();
         thread::spawn(move || {
             let mut rx_buf = [0u8; PACKET_SIZE];
             loop {
-                let Ok((_, addr)) = socket.recv_from(&mut rx_buf) else {
+                let Ok((_, addr)) = rx_socket.recv_from(&mut rx_buf) else {
                     continue;
                 };
 
                 if last_received_time.read().unwrap().elapsed() > CONNECTION_TIMEOUT {
                     // New connection
-                    println!("Receiving packets from {:?}", addr);
+                    println!(
+                        "Receiving packets from {}:{}",
+                        addr.ip().to_canonical(),
+                        addr.port()
+                    );
                     *last_command_addr.write().unwrap() = Some(addr);
                 } else if *last_command_addr.read().unwrap() != Some(addr) {
                     // Different connection source active
@@ -60,41 +61,32 @@ pub fn start_udp_serial_bridge(last_received_time: Arc<RwLock<Instant>>) -> u8 {
                 bytes.extend_from_slice(&rx_buf);
                 write_serial_packet(&mut write_port, bytes).unwrap();
             }
-        })
-    };
-    spawn_receive_thread(rx_socket_v4);
-    spawn_receive_thread(rx_socket_v6);
-
-    // Serial -> Udp
-    {
-        let last_received_time = last_received_time.clone();
-        thread::spawn(move || {
-            let mut rtt_avg = Duration::from_secs(0);
-            let mut last_rtt_print = Instant::now();
-            let mut count = 0;
-
-            loop {
-                // No timeout because this simple forwarding thread is independent of the outgoing udp connection
-                let decoded = read_serial_packet(&mut read_port, None).unwrap();
-                count += 1;
-
-                rtt_avg = (19 * rtt_avg + last_received_time.read().unwrap().elapsed()) / 20;
-                if last_rtt_print.elapsed() > Duration::from_secs(1) {
-                    println!("Serial RTT: {}us; {count} responses/s", rtt_avg.as_micros());
-                    count = 0;
-                    last_rtt_print = Instant::now();
-                }
-
-                if let Some(addr) = *last_command_addr.read().unwrap() {
-                    if addr.is_ipv4() {
-                        tx_socket_v4.send_to(&decoded[1..], addr).unwrap();
-                    } else {
-                        tx_socket_v6.send_to(&decoded[1..], addr).unwrap();
-                    }
-                }
-            }
         });
     }
+
+    // Serial -> Udp
+    thread::spawn(move || {
+        let mut rtt_avg = Duration::from_secs(0);
+        let mut last_rtt_print = Instant::now();
+        let mut count = 0;
+
+        loop {
+            // No timeout because this simple forwarding thread is independent of the outgoing udp connection
+            let decoded = read_serial_packet(&mut read_port, None).unwrap();
+            count += 1;
+
+            rtt_avg = (19 * rtt_avg + last_received_time.read().unwrap().elapsed()) / 20;
+            if last_rtt_print.elapsed() > Duration::from_secs(1) {
+                println!("Serial RTT: {}us; {count} responses/s", rtt_avg.as_micros());
+                count = 0;
+                last_rtt_print = Instant::now();
+            }
+
+            if let Some(addr) = *last_command_addr.read().unwrap() {
+                tx_socket.send_to(&decoded[1..], addr).unwrap();
+            }
+        }
+    });
 
     robot_id
 }
