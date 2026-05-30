@@ -20,28 +20,28 @@ pub const MAX_CHUNKS_PER_DATAGRAM: usize = 20;
  */
 
 // Command
-const DRIBBLER_CODEC: FloatCodec = FloatCodec::new(8, -1.0, 1.0);
-const POS_CODEC: FloatCodec = FloatCodec::new(11, -8.0, 8.0);
-const VEL_CODEC: FloatCodec = FloatCodec::new(12, -6.0, 6.0);
-const ACC_CODEC: FloatCodec = FloatCodec::new(13, -15.0, 15.0);
-const JERK_CODEC: FloatCodec = FloatCodec::new(15, -100.0, 100.0);
-const ANGLE_CODEC: FloatCodec = FloatCodec::new(9, -PI, PI);
-const ANGLE_VEL_CODEC: FloatCodec = FloatCodec::new(10, -20.0 * PI, 20.0 * PI);
-const ANGLE_ACC_CODEC: FloatCodec = FloatCodec::new(14, -15000.0, 15000.0);
-const ANGLE_JERK_CODEC: FloatCodec = FloatCodec::new(17, -400000.0, 400000.0);
-const TRAJECTORY_PATH_ALPHA_CODEC: FloatCodec = FloatCodec::new(15, -PI, PI);
-const TRAJECTORY_PATH_T_CODEC: FloatCodec = FloatCodec::new(15, 0.0, 40.0);
-const TRAJECTORY_PATH_ACC_CODEC: FloatCodec = FloatCodec::new(12, 0.0, 15.0);
-const TRAJECTORY_PATH_VEL_CODEC: FloatCodec = FloatCodec::new(12, 0.0, 6.0);
-const TRAJECTORY_PATH_SLOW_DOWN_TIME_CODEC: FloatCodec = FloatCodec::new(9, 0.0, 1.0);
+pub const DRIBBLER_CODEC: FloatCodec = FloatCodec::new(8, -1.0, 1.0);
+pub const POS_CODEC: FloatCodec = FloatCodec::new(11, -8.0, 8.0);
+pub const VEL_CODEC: FloatCodec = FloatCodec::new(12, -6.0, 6.0);
+pub const ACC_CODEC: FloatCodec = FloatCodec::new(13, -15.0, 15.0);
+pub const JERK_CODEC: FloatCodec = FloatCodec::new(15, -100.0, 100.0);
+pub const ANGLE_CODEC: FloatCodec = FloatCodec::new(9, -PI, PI);
+pub const ANGLE_VEL_CODEC: FloatCodec = FloatCodec::new(10, -20.0 * PI, 20.0 * PI);
+pub const ANGLE_ACC_CODEC: FloatCodec = FloatCodec::new(14, -15000.0, 15000.0);
+pub const ANGLE_JERK_CODEC: FloatCodec = FloatCodec::new(17, -400000.0, 400000.0);
+pub const TRAJECTORY_PATH_ALPHA_CODEC: FloatCodec = FloatCodec::new(15, -PI, PI);
+pub const TRAJECTORY_PATH_T_CODEC: FloatCodec = FloatCodec::new(15, 0.0, 40.0);
+pub const TRAJECTORY_PATH_ACC_CODEC: FloatCodec = FloatCodec::new(12, 0.0, 15.0);
+pub const TRAJECTORY_PATH_VEL_CODEC: FloatCodec = FloatCodec::new(12, 0.0, 6.0);
+pub const TRAJECTORY_PATH_SLOW_DOWN_TIME_CODEC: FloatCodec = FloatCodec::new(9, 0.0, 1.0);
 // Response
-const LOAD_TORQUE_CODEC: FloatCodec = FloatCodec::new(8, -10.0, 10.0);
-const BATTERY_CODEC: FloatCodec = FloatCodec::new(8, 0.0, 1.0);
-const PACKET_LOSS_CODEC: FloatCodec = FloatCodec::new(8, 0.0, 1.0);
-const MEASURED_POS_CODEC: FloatCodec = POS_CODEC.with_bits(14);
-const MEASURED_VEL_CODEC: FloatCodec = VEL_CODEC.with_bits(15);
-const MEASURED_ANGLE_CODEC: FloatCodec = ANGLE_CODEC.with_bits(14);
-const MEASURED_ANGLE_VEL_CODEC: FloatCodec = ANGLE_VEL_CODEC.with_bits(14);
+pub const LOAD_TORQUE_CODEC: FloatCodec = FloatCodec::new(8, -10.0, 10.0);
+pub const BATTERY_CODEC: FloatCodec = FloatCodec::new(8, 0.0, 1.0);
+pub const PACKET_LOSS_CODEC: FloatCodec = FloatCodec::new(8, 0.0, 1.0);
+pub const MEASURED_POS_CODEC: FloatCodec = POS_CODEC.with_bits(14);
+pub const MEASURED_VEL_CODEC: FloatCodec = VEL_CODEC.with_bits(15);
+pub const MEASURED_ANGLE_CODEC: FloatCodec = ANGLE_CODEC.with_bits(14);
+pub const MEASURED_ANGLE_VEL_CODEC: FloatCodec = ANGLE_VEL_CODEC.with_bits(14);
 
 fn normalize_angle(mut angle: f32) -> f32 {
     while angle < -PI {

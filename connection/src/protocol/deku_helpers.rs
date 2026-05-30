@@ -69,11 +69,13 @@ pub trait DekuPackedSize<const SIZE: usize>:
 }
 impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketPacking<SIZE> for T {
     fn pack_to_slice(&self, slice: &mut [u8]) {
-        let written = self.to_slice(slice).unwrap();
+        // FIXME: The bytes_written return is broken before deku 0.20
+        _ = self.to_slice(slice).unwrap();
+        /*let written = self.to_slice(slice).unwrap();
         #[allow(clippy::needless_range_loop)]
-        for i in written..SIZE {
+        for i in written..SIZE  {
             slice[i] = 0;
-        }
+        }*/
     }
 }
 impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketUnpacking<SIZE> for T {
@@ -84,9 +86,9 @@ impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketUnpacking<SIZE> for T {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FloatCodec {
-    bits: usize,
-    min: f32,
-    max: f32,
+    pub bits: usize,
+    pub min: f32,
+    pub max: f32,
 }
 
 impl FloatCodec {
@@ -134,17 +136,21 @@ pub fn float_to_int<W: std::io::Write + std::io::Seek>(
     codec: FloatCodec,
     x: f32,
 ) -> Result<(), DekuError> {
-    let x = x.clamp(codec.min, codec.max);
+    let x = x.clamp(codec.min, codec.max) as f64;
 
-    let y_max = ((1 << (codec.bits - 1)) - 1) as f32;
-    let y_min = -(1 << (codec.bits - 1)) as f32;
+    let x_max = codec.max as f64;
+    let x_min = codec.min as f64;
+    let y_max = (1 << (codec.bits - 1)) - 1;
+    let y_min = -(1 << (codec.bits - 1));
+    let y_maxf = y_max as f64;
+    let y_minf = y_min as f64;
 
     // To just slightly tip the rounding towards +inf, we add EPSILON.
     // That way, when mapping 0 from a symmetric interval [-a, a] to an N bit signed integer interval,
     // 0 is mapped to 0 instead of -1. Because otherwise, the call below would result in (-0.5).round(),
     // which equals -1.
-    let y = (y_min + ((y_max - y_min) * (x - codec.min)) / (codec.max - codec.min) + 10e-10).round()
-        as i32;
+    let y = (y_minf + ((y_maxf - y_minf) * (x - x_min)) / (x_max - x_min) + 1e-8).round() as i32;
+    let y = y.clamp(y_min, y_max);
 
     y.to_writer(writer, (endian, deku::ctx::BitSize(codec.bits), bit_order))
 }
@@ -182,12 +188,15 @@ pub fn float_to_uint<W: std::io::Write + std::io::Seek>(
     codec: FloatCodec,
     x: f32,
 ) -> Result<(), DekuError> {
-    let x = x.clamp(codec.min, codec.max);
+    let x = x.clamp(codec.min, codec.max) as f64;
 
-    let y_max = ((1 << codec.bits) - 1) as f32;
-    let y_min = 0f32;
+    let x_max = codec.max as f64;
+    let x_min = codec.min as f64;
+    let y_max = (1u32 << codec.bits) - 1u32;
+    let y_maxf = y_max as f64;
 
-    let y = (y_min + ((y_max - y_min) * (x - codec.min)) / (codec.max - codec.min)).round() as u32;
+    let y = ((y_maxf * (x - x_min)) / (x_max - x_min)).round() as u32;
+    let y = y.clamp(0, y_max);
 
     y.to_writer(writer, (endian, deku::ctx::BitSize(codec.bits), bit_order))
 }
