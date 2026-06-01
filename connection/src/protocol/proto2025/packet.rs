@@ -147,20 +147,20 @@ pub struct RegularCommandPayload {
     pub has_detection: bool,
     /// Current x position, as detected by the vision
     #[deku(
-        reader = "float_from_int(deku::reader, endian, bit_order, POS_CODEC)",
-        writer = "float_to_int(deku::writer, endian, bit_order, POS_CODEC, self.detection_pos_x)"
+        reader = "{let val = float_from_int(deku::reader, endian, bit_order, POS_CODEC); if *has_detection { val } else { Ok(f32::NAN) }}",
+        writer = "float_to_int(deku::writer, endian, bit_order, POS_CODEC, if *has_detection { self.detection_pos_x } else { 0.0 })"
     )]
     pub detection_pos_x: f32,
     /// Current y position, as detected by the vision
     #[deku(
-        reader = "float_from_int(deku::reader, endian, bit_order, POS_CODEC)",
-        writer = "float_to_int(deku::writer, endian, bit_order, POS_CODEC, self.detection_pos_y)"
+        reader = "{let val = float_from_int(deku::reader, endian, bit_order, POS_CODEC); if *has_detection { val } else { Ok(f32::NAN) }}",
+        writer = "float_to_int(deku::writer, endian, bit_order, POS_CODEC, if *has_detection { self.detection_pos_y } else { 0.0 })"
     )]
     pub detection_pos_y: f32,
     /// Current angular velocity in mrad/s, as detected by the vision
     #[deku(
-        reader = "float_from_int(deku::reader, endian, bit_order, ANGLE_CODEC)",
-        writer = "float_to_int(deku::writer, endian, bit_order, ANGLE_CODEC, normalize_angle(self.detection_phi))"
+        reader = "{let val = float_from_int(deku::reader, endian, bit_order, ANGLE_CODEC); if *has_detection { val } else { Ok(f32::NAN) }}",
+        writer = "float_to_int(deku::writer, endian, bit_order, ANGLE_CODEC, if *has_detection { normalize_angle(self.detection_phi) } else { 0.0 })"
     )]
     pub detection_phi: f32,
 
