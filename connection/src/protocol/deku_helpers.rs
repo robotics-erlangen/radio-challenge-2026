@@ -69,13 +69,12 @@ pub trait DekuPackedSize<const SIZE: usize>:
 }
 impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketPacking<SIZE> for T {
     fn pack_to_slice(&self, slice: &mut [u8]) {
-        // FIXME: The bytes_written return is broken before deku 0.20
         _ = self.to_slice(slice).unwrap();
-        /*let written = self.to_slice(slice).unwrap();
+        let written = self.to_slice(slice).unwrap();
         #[allow(clippy::needless_range_loop)]
         for i in written..SIZE  {
             slice[i] = 0;
-        }*/
+        }
     }
 }
 impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketUnpacking<SIZE> for T {
