@@ -72,7 +72,7 @@ impl<T: DekuPackedSize<SIZE>, const SIZE: usize> PacketPacking<SIZE> for T {
         _ = self.to_slice(slice).unwrap();
         let written = self.to_slice(slice).unwrap();
         #[allow(clippy::needless_range_loop)]
-        for i in written..SIZE  {
+        for i in written..SIZE {
             slice[i] = 0;
         }
     }
