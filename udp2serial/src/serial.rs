@@ -29,7 +29,7 @@ pub fn start_udp_serial_bridge(
     let mut read_port = serialport::new(&selected_port_name, BAUD_RATE)
         .timeout(Duration::from_millis(100))
         .open()
-        .unwrap_or_else(|_| panic!("Failed to open serial port {selected_port_name}"));
+        .unwrap_or_else(|e| panic!("Failed to open serial port {selected_port_name}: {e}"));
 
     println!("Querying robot ID...");
     let robot_id = query_robot_id(&mut read_port);
