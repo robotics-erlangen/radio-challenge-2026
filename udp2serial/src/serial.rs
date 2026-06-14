@@ -7,16 +7,26 @@ use crate::{CONNECTION_TIMEOUT, DATA_PORT, PACKET_SIZE};
 
 const BAUD_RATE: u32 = 921600;
 
-pub fn start_udp_serial_bridge(last_received_time: Arc<RwLock<Instant>>) -> u8 {
-    let available_ports = serialport::available_ports().expect("Failed to enumerate serial ports");
-    println!("Available ports: {:?}", available_ports);
-    let selected_port_name = &available_ports
-        .first()
-        .expect("No serial port found")
-        .port_name;
+pub fn start_udp_serial_bridge(
+    last_received_time: Arc<RwLock<Instant>>,
+    fixed_port: Option<String>,
+) -> u8 {
+    let selected_port_name = if let Some(port) = fixed_port {
+        println!("Got serial port from command line: {port}");
+        port
+    } else {
+        let available_ports =
+            serialport::available_ports().expect("Failed to enumerate serial ports");
+        println!("Available ports: {:?}", available_ports);
+        available_ports
+            .first()
+            .expect("No serial port found")
+            .port_name
+            .clone()
+    };
     println!("Selected port: {selected_port_name}");
 
-    let mut read_port = serialport::new(selected_port_name, BAUD_RATE)
+    let mut read_port = serialport::new(&selected_port_name, BAUD_RATE)
         .timeout(Duration::from_millis(100))
         .open()
         .unwrap_or_else(|_| panic!("Failed to open serial port {selected_port_name}"));

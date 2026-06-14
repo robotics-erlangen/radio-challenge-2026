@@ -47,7 +47,8 @@ fn main() {
     {
         println!("Starting serial bridge...");
         println!();
-        robot_id = serial::start_udp_serial_bridge(last_received_time.clone());
+        let port_arg = std::env::args().nth(1);
+        robot_id = serial::start_udp_serial_bridge(last_received_time.clone(), port_arg);
     }
     #[cfg(feature = "mock")]
     {
