@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [features]
 mock = ["dep:hostname"]
+libudev = ["serialport/libudev"] # Better serial discovery on linux, but a compile-time dependency on libudev-dev
 
 [dependencies]
 serialport.workspace = true

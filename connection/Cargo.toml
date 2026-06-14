@@ -8,6 +8,7 @@ rust-version.workspace = true
 default = ["serial", "udp"]
 serial = ["dep:mio", "dep:mio-serial", "dep:cobs"]
 udp = ["dep:mio", "mio/net", "dep:socket2", "dep:network-interface"]
+libudev = ["mio-serial/libudev"] # Better serial discovery on linux, but a compile-time dependency on libudev-dev
 
 [dependencies]
 flume.workspace = true
