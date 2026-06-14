@@ -140,7 +140,12 @@ impl<
 > ConnectionDriver<RC, RR, DC, DR, P>
 {
     pub fn start(config: ConnectionDriverConfig) -> Self {
+        #[cfg(any(feature = "udp", feature = "serial"))]
         info!("Starting connection driver");
+        #[cfg(not(any(feature = "udp", feature = "serial")))]
+        warn!(
+            "Starting connection driver without any transceivers. Enable at least one of the following features: udp, serial"
+        );
 
         // Mio setup
         let poll = mio::Poll::new().unwrap();
