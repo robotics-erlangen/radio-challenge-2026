@@ -26,13 +26,8 @@ pub fn start_udp_serial_bridge(
     };
     println!("Selected port: {selected_port_name}");
 
-    let mut read_port = serialport::new(&selected_port_name, BAUD_RATE)
-        .timeout(Duration::from_millis(100))
-        .open()
-        .unwrap_or_else(|e| panic!("Failed to open serial port {selected_port_name}: {e}"));
-
     println!("Querying robot ID...");
-    let robot_id = query_robot_id(&mut read_port);
+    let (mut read_port, robot_id) = establish_robot_connection(&selected_port_name);
     println!("Robot ID: {robot_id}");
 
     let rx_socket = crate::bind_dual_stack(DATA_PORT).unwrap();
@@ -101,28 +96,48 @@ pub fn start_udp_serial_bridge(
     robot_id
 }
 
-fn query_robot_id(port: &mut Box<dyn SerialPort>) -> u8 {
+fn establish_robot_connection(port_name: &str) -> (Box<dyn SerialPort>, u8) {
+    let mut request_buf = [0u8; 1 + PACKET_SIZE]; // +1 for serial msg type
+    request_buf[0] = 1; // Robot ID request message type
+
     loop {
-        let mut request_buf = [0u8; 1 + PACKET_SIZE]; // +1 for serial msg type
-        request_buf[0] = 1; // Robot ID request message type
+        // Reopen the port every time to catch situations where the port isn't fully initialized yet
+        let port_result = serialport::new(port_name, BAUD_RATE)
+            .timeout(Duration::from_millis(100))
+            .open();
 
-        let response = write_serial_packet(port, request_buf.to_vec())
-            .and_then(|_| read_serial_packet(port, Some(Duration::from_millis(100))));
+        match port_result {
+            Ok(mut port) => {
+                // Clear the port's buffers, just to be safe
+                let _ = port.clear(serialport::ClearBuffer::All);
 
-        match response {
-            Ok(response) if response[0] == 1 => {
-                return response[1]; // Return the robot ID (second byte of the response)
-            }
-            Ok(response) => {
-                eprintln!(
-                    "Unexpected message type in robot ID response: {:?} (expected 1)",
-                    response[0]
-                );
+                match write_serial_packet(&mut port, request_buf.to_vec()) {
+                    Ok(_) => {
+                        match read_serial_packet(&mut port, Some(Duration::from_millis(100))) {
+                            Ok(response) if response[0] == 1 => {
+                                return (port, response[1]); // Return the robot ID (second byte of the response)
+                            }
+                            Ok(response) => {
+                                eprintln!(
+                                    "Unexpected message type in robot ID response: {} (expected 1)",
+                                    response[0]
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to read robot ID response: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to write robot ID request: {e}");
+                    }
+                }
             }
             Err(e) => {
-                eprintln!("Error querying robot ID: {e}");
+                eprintln!("Failed to open serial port {port_name}: {e}");
             }
         }
+
         // Sleep and retry if failed
         thread::sleep(Duration::from_secs(1));
     }
