@@ -1,4 +1,4 @@
-use crate::utils::conn_stats::ConnectionStats;
+use crate::utils::metrics_tracker::MetricsSample;
 use std::fmt::{Debug, Formatter};
 use std::time::Instant;
 
@@ -10,8 +10,8 @@ pub mod proto2025;
 pub trait RadioProtocol<RC, RR, DC, DR> {
     const RESPONSE_PACKET_SIZE: usize;
 
-    /// Returns some basic performance statistics about the connection.
-    fn stats(&self) -> ConnectionStats;
+    /// Sets a callback for receiving [MetricsSample] events
+    fn metrics_callback(&mut self, callback: Option<Box<dyn Fn(MetricsSample) + Send + Sync>>);
 
     /// Unpacks a packet and updates internal connection state.
     // TODO: Replace &[u8] with &[u8; RESPONSE_PACKET_SIZE]

@@ -1,7 +1,7 @@
 use crate::protocol::deku_helpers::{PacketPacking, PacketUnpacking};
 use crate::protocol::proto2025::packet::*;
 use crate::protocol::{PacketRxResult, RadioProtocol};
-use crate::utils::conn_stats::{ConnectionStatTracker, ConnectionStats};
+use crate::utils::metrics_tracker::{MetricsSample, MetricsTracker};
 use datagrams::{CommandDatagram, CommandDatagramType, ResponseDatagram, ResponseDatagramType};
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -19,7 +19,7 @@ impl RadioProtocol2025Payload for Box<[u8; PAYLOAD_SIZE]> {}
 pub struct RadioProtocol2025 {
     // General
     counter: u8,
-    stat_tracker: ConnectionStatTracker,
+    metrics_tracker: Option<MetricsTracker>,
 
     // Datagrams
     datagram_queue: VecDeque<CommandDatagram>,
@@ -37,7 +37,7 @@ impl RadioProtocol2025 {
     pub(crate) fn new() -> Self {
         Self {
             counter: 0,
-            stat_tracker: ConnectionStatTracker::new(100, 5),
+            metrics_tracker: None,
             datagram_queue: VecDeque::new(),
             datagram_chunk_queue: VecDeque::new(),
             sent_datagram_packet: None,
@@ -93,8 +93,8 @@ impl<
 {
     const RESPONSE_PACKET_SIZE: usize = PAYLOAD_SIZE + 1; // +1 for header
 
-    fn stats(&self) -> ConnectionStats {
-        self.stat_tracker.get()
+    fn metrics_callback(&mut self, callback: Option<Box<dyn Fn(MetricsSample) + Send + Sync>>) {
+        self.metrics_tracker = callback.map(|c| MetricsTracker::new(5, c));
     }
 
     fn packet_received(
@@ -104,8 +104,10 @@ impl<
     ) -> PacketRxResult<RR, ResponseDatagram> {
         let header = PacketHeader::unpack(bytes).unwrap();
 
-        // Update the stat tracker
-        self.stat_tracker.received(header.counter as u32, timestamp);
+        // Update the metrics tracker
+        if let Some(stat_tracker) = &mut self.metrics_tracker {
+            stat_tracker.received(header.counter as u32, timestamp);
+        }
 
         // Handle ack
         if let Some(sent_datagram_packet) = &self.sent_datagram_packet
@@ -199,8 +201,11 @@ impl<
             regular_data.pack_to_slice(&mut packet[1..]);
         };
 
-        self.stat_tracker
-            .sent(header.counter as u32, Instant::now());
+        // Update the metrics tracker
+        if let Some(stat_tracker) = &mut self.metrics_tracker {
+            stat_tracker.sent(header.counter as u32, Instant::now());
+        }
+
         packet
     }
 }

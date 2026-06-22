@@ -1,4 +1,5 @@
 use crate::transceivers::{RobotTransceiverAddress, TransceiverError};
+use crate::utils::metrics_tracker::MetricsSample;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,5 +15,6 @@ pub enum ConnectionDriverEvent<RR, DR> {
     Disconnected(u8),
     PacketReceived(u8, RR, Instant),
     DatagramReceived(u8, DR, Instant),
+    MetricsSample(u8, MetricsSample),
     TransceiverError(Arc<TransceiverError>), // Needs to be Arc to allow cloning the wrapped io::Error
 }

@@ -4,7 +4,6 @@ use crate::transceivers::serial::SerialTransceiverConfig;
 #[cfg(feature = "udp")]
 use crate::transceivers::udp::UdpTransceiverConfig;
 use crate::transceivers::{TransceiverEvent, TransceiverGroup, TransceiverGroupConfig};
-use crate::utils::conn_stats::ConnectionStats;
 use crate::utils::dual_map::DualHashMap;
 use crate::utils::id_filter::RobotIdFilter;
 use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
@@ -139,7 +138,7 @@ impl<
     P: RadioProtocol<RC, RR, DC, DR> + Default + Send + Sync + 'static,
 > ConnectionDriver<RC, RR, DC, DR, P>
 {
-    pub fn start(config: ConnectionDriverConfig) -> Self {
+    pub fn start(config: ConnectionDriverConfig, enable_metrics: bool) -> Self {
         #[cfg(any(feature = "udp", feature = "serial"))]
         info!("Starting connection driver");
         #[cfg(not(any(feature = "udp", feature = "serial")))]
@@ -163,6 +162,7 @@ impl<
                     active_connections,
                     thread_control_receiver,
                     message_sender,
+                    enable_metrics,
                     config.into(),
                 )
             })
@@ -210,13 +210,6 @@ impl<
         self.out_channel.recv_async()
     }
 
-    pub fn connection_stats(&self, robot_id: u8) -> Option<ConnectionStats> {
-        let conns = self.active_connections.read().unwrap();
-        conns
-            .get_prim(&robot_id)
-            .map(|(_addr, proto)| proto.stats())
-    }
-
     pub fn has_robot(&self, robot_id: u8) -> bool {
         let conns = self.active_connections.read().unwrap();
         conns.contains_prim(&robot_id)
@@ -235,6 +228,7 @@ impl<
         active_connections: Arc<RwLock<DualHashMap<u8, RobotTransceiverAddress, P>>>,
         control_channel: Receiver<ConnectionDriverControlMessage>,
         driver_event_out: Sender<ConnectionDriverEvent<RR, DR>>,
+        enable_metrics: bool,
         config: TransceiverGroupConfig,
     ) {
         let mut events = mio::Events::with_capacity(64);
@@ -324,7 +318,19 @@ impl<
                         let mut active_connections = active_connections.write().unwrap();
                         if !active_connections.contains_prim(&robot_id) {
                             debug!("Robot {} connected at address {}", robot_id, addr);
-                            active_connections.insert(robot_id, addr.clone(), P::default());
+
+                            let mut proto = P::default();
+                            if enable_metrics {
+                                let driver_event_out = driver_event_out.clone();
+                                proto.metrics_callback(Some(Box::new(move |metrics_sample| {
+                                    _ = driver_event_out.send(ConnectionDriverEvent::MetricsSample(
+                                        robot_id,
+                                        metrics_sample,
+                                    ))
+                                })));
+                            }
+
+                            active_connections.insert(robot_id, addr.clone(), proto);
                             // Block on full channel because Connected messages can't be lost
                             driver_event_out
                                 .send(ConnectionDriverEvent::Connected(robot_id, addr))

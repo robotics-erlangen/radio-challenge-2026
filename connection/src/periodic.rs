@@ -1,6 +1,5 @@
 use crate::driver::ConnectionDriver;
 use crate::protocol::RadioProtocol;
-use crate::utils::conn_stats::ConnectionStats;
 use crate::{ConnectionDriverEvent, RobotTransceiverAddress};
 use flume::Sender;
 use std::collections::HashMap;
@@ -117,11 +116,6 @@ impl<
     }
     pub fn recv_async(&'_ self) -> flume::r#async::RecvFut<'_, ConnectionDriverEvent<RR, DR>> {
         self.inner.recv_async()
-    }
-
-    // TODO: Emit stats as a ConnectionStatistics message
-    pub fn connection_stats(&self, robot_id: u8) -> Option<ConnectionStats> {
-        self.inner.connection_stats(robot_id)
     }
 
     pub fn has_robot(&self, robot_id: u8) -> bool {
