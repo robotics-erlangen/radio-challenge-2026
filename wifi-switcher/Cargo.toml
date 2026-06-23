@@ -4,5 +4,5 @@ edition.workspace = true
 license = "MIT OR Apache-2.0"
 rust-version.workspace = true
 
-[dependencies]
+[target.'cfg(unix)'.dependencies]
 gpiocdev = "0.8.0"
